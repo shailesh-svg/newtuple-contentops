@@ -1,0 +1,129 @@
+idea_id,created_at,source_type,source_link,raw_input,title,draft_text,bucket,status,reviewer,review_notes,scheduled_at,published_url,platform,hook_type,voice_score,engagement_likes,engagement_comments,engagement_shares,reach,ctr,next_repurpose_action
+WK1-001,2026-05-26,starter_pack,,Prototype success does not predict production reliability.,Prototype success is not production readiness,"Most AI agent demos work.
+
+Most AI agent systems do not.
+
+The difference is not the model.
+
+The difference is everything around the model:
+
+- context handoffs
+- exception paths
+- ownership
+- observability
+- approval points
+- recovery when the workflow breaks
+
+In a demo, the happy path is enough.
+
+In production, the edge cases become the product.
+
+Enterprise teams should stop asking only: can the agent complete the task?
+
+The better question is:
+
+what happens when the agent cannot complete the task cleanly?
+
+That is where real AI operations begin.",Shipping Production-Ready Intelligence,needs_review,,,2026-05-27,,linkedin,tension,8,,,,,,Repurpose into reliability checklist
+WK1-002,2026-05-26,starter_pack,,Most AI workflow failures are handoff failures.,The handoff is the workflow,"Most AI workflow failures are not model failures.
+
+They are handoff failures.
+
+The agent creates an output.
+
+Then the workflow depends on someone knowing:
+
+- who reviews it
+- where it goes next
+- what counts as acceptable
+- what happens if it is wrong
+- who owns the exception
+
+If those answers are unclear, automation just moves confusion faster.
+
+This is why workflow design matters before agent design.
+
+The model can generate the step.
+
+The system has to own the handoff.",Workflow Wins,needs_review,,,2026-05-28,,linkedin,practical_observation,8,,,,,,Turn into carousel on handoff design
+WK1-003,2026-05-26,starter_pack,,Enterprise teams ask for autonomous agents before defining operating ownership.,Autonomy needs ownership first,"Many teams start with the wrong AI question.
+
+They ask:
+
+how autonomous can this agent be?
+
+The better question is:
+
+who owns the outcome?
+
+Autonomy without ownership creates operational risk.
+
+Before scaling agentic systems, teams need clear answers:
+
+- who approves high-impact actions
+- who monitors failures
+- who updates the workflow
+- who handles exceptions
+- who decides when the agent should stop
+
+Enterprise AI is not just a capability layer.
+
+It is an operating model decision.
+
+The companies that get this right will not be the ones with the flashiest demos.
+
+They will be the ones with the clearest ownership model.",Building Your Agentic Enterprise,needs_review,,,2026-05-29,,linkedin,misconception,8,,,,,,Use as founder talking point
+WK1-004,2026-05-26,starter_pack,,Human oversight should be designed into the system instead of added as manual fallback.,Human oversight is system design,"Human oversight is often treated like a fallback.
+
+Something added after the AI workflow is built.
+
+That is backwards.
+
+In production AI systems, human oversight is part of the architecture.
+
+It defines:
+
+- where judgment is required
+- what should be escalated
+- what can be automated safely
+- what needs auditability
+- what cannot be left to probability
+
+The goal is not to keep humans in every loop.
+
+The goal is to design the right loops.
+
+Good AI operations do not remove humans blindly.
+
+They make human judgment more precise.",Founder Notes,needs_review,,,2026-05-30,,linkedin,reframe,8,,,,,,Expand into oversight framework
+WK1-005,2026-05-26,starter_pack,,The AI shift is moving from model access to operational reliability.,The AI shift is operational now,"The AI conversation is shifting.
+
+It is no longer just:
+
+which model is best?
+
+It is becoming:
+
+which workflows can we trust in production?
+
+That shift matters.
+
+Model access is becoming easier.
+
+Operational reliability is still hard.
+
+The hard parts are practical:
+
+- context management
+- evals
+- handoffs
+- permissions
+- monitoring
+- rollback paths
+- business ownership
+
+This is where enterprise AI will be won.
+
+Not by treating agents as isolated tools.
+
+But by designing them as operational systems.",What Changed in AI,needs_review,,,2026-05-31,,linkedin,market_shift,8,,,,,,Repurpose into weekly AI shift post

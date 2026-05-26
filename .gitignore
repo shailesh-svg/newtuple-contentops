@@ -1,0 +1,33 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+agent/.env
+agent/.env.*
+!agent/.env.example
+contentops/workflows/.env
+contentops/workflows/.env.*
+!contentops/workflows/.env.example
+
+# Local authz mappings can contain workspace-specific Slack user IDs.
+agent/authz.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# OS/editor artifacts
+.DS_Store
+.idea/
+.vscode/
+
+# Logs and generated runtime files
+*.log
+logs/
+tmp/

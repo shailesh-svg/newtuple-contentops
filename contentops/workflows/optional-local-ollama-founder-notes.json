@@ -1,0 +1,208 @@
+{
+  "name": "Newtuple Founder Notes (Local)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.CONTENTOPS_SHEET_ID}}",
+        "sheetName": "Sheet1",
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "status",
+              "lookupValue": "new"
+            }
+          ]
+        }
+      },
+      "id": "sheet-read",
+      "name": "Read New Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [430, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__SET_IN_N8N__",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "batch",
+      "name": "Split",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-founder",
+              "leftValue": "={{$json.source_type}}",
+              "rightValue": "founder_note",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-founder",
+      "name": "Is Founder Note?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.OLLAMA_BASE_URL || 'http://host.docker.internal:11434'}}/api/chat",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": $env.OLLAMA_MODEL || \"llama3.1:8b\",\n  \"stream\": false,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Return valid JSON only with keys: title, hook, post_body, cta, bucket.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Rewrite this founder note into one LinkedIn post in Newtuple voice. Include operational insight and enterprise implication. Text: \" + ($json.raw_input || '')\n    }\n  ]\n}"
+      },
+      "id": "generate",
+      "name": "Generate Founder Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 220]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.message?.content || '{}';\nconst clean = raw.replace(/^```json\\s*/i, '').replace(/```$/i, '').trim();\nlet parsed = {};\ntry { parsed = JSON.parse(clean); } catch (e) { parsed = { title: 'Founder note parse warning', post_body: clean, bucket: 'Founder Notes' }; }\nconst row = $item(0).$node['Split'].json;\nreturn [{ json: { ...row, draft: parsed } }];"
+      },
+      "id": "parse",
+      "name": "Parse JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1290, 220]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{$env.CONTENTOPS_SHEET_ID}}",
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "idea_id": "={{$json.idea_id}}",
+            "title": "={{$json.draft.title}}",
+            "draft_text": "={{$json.draft.post_body}}",
+            "bucket": "={{$json.draft.bucket || 'Founder Notes'}}",
+            "status": "needs_review"
+          },
+          "matchingColumns": [
+            "idea_id"
+          ],
+          "schema": [
+            {
+              "id": "idea_id",
+              "displayName": "idea_id",
+              "required": false,
+              "defaultMatch": true,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "sheet-update",
+      "name": "Update Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1510, 220],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__SET_IN_N8N__",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"Founder Note draft ready for review: \" + ($json.idea_id || '') + \" | \" + ($json.draft.title || '')\n}"
+      },
+      "id": "slack",
+      "name": "Slack Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1720, 220]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {"main": [[{"node": "Read New Rows", "type": "main", "index": 0}]]},
+    "Read New Rows": {"main": [[{"node": "Split", "type": "main", "index": 0}]]},
+    "Split": {"main": [[{"node": "Is Founder Note?", "type": "main", "index": 0}]]},
+    "Is Founder Note?": {"main": [[{"node": "Generate Founder Draft", "type": "main", "index": 0}], []]},
+    "Generate Founder Draft": {"main": [[{"node": "Parse JSON", "type": "main", "index": 0}]]},
+    "Parse JSON": {"main": [[{"node": "Update Row", "type": "main", "index": 0}]]},
+    "Update Row": {"main": [[{"node": "Slack Notify", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "newtuple-founder-notes-local-v1",
+  "id": "newtuple-founder-notes-local",
+  "tags": [
+    {
+      "name": "newtuple"
+    },
+    {
+      "name": "zero-cost"
+    }
+  ]
+}

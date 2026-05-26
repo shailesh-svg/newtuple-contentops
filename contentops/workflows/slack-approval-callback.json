@@ -1,0 +1,198 @@
+{
+  "name": "Newtuple Slack Approval Callback",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-review",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-in",
+      "name": "Slack Review Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = $json.body || $json;\nconst rawText = (payload.text || '').trim();\nconst user = payload.user_name || payload.user_id || 'slack_user';\nconst parts = rawText.split(/\\s+/);\nif (parts.length < 2) {\n  return [{ json: { ok: false, message: 'Usage: /content-review <idea_id> approve|revise|reject <notes>' } }];\n}\nconst idea_id = parts[0];\nconst action = (parts[1] || '').toLowerCase();\nconst notes = parts.slice(2).join(' ').trim();\nconst statusMap = {\n  approve: 'Approved',\n  revised: 'Needs Revision',\n  revise: 'Needs Revision',\n  reject: 'Rejected'\n};\nconst mappedStatus = statusMap[action];\nif (!mappedStatus) {\n  return [{ json: { ok: false, message: 'Action must be approve, revise, or reject.' } }];\n}\nreturn [{\n  json: {\n    ok: true,\n    idea_id,\n    action,\n    status: mappedStatus,\n    reviewer: user,\n    review_notes: notes || ''\n  }\n}];"
+      },
+      "id": "parse-command",
+      "name": "Parse Slash Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ok-check",
+              "leftValue": "={{$json.ok}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-valid",
+      "name": "Valid Command?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{$env.CONTENTOPS_SHEET_ID}}",
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "idea_id": "={{$json.idea_id}}",
+            "status": "={{$json.status}}",
+            "reviewer": "={{$json.reviewer}}",
+            "review_notes": "={{$json.review_notes}}"
+          },
+          "matchingColumns": ["idea_id"],
+          "schema": [
+            {
+              "id": "idea_id",
+              "displayName": "idea_id",
+              "required": false,
+              "defaultMatch": true,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "sheet-update",
+      "name": "Update Review Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [930, 220],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__SET_IN_N8N__",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=Review recorded for {{$json.idea_id}}. Status: {{$json.status}}.",
+        "options": {}
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1160, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{$json.message}}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-invalid",
+      "name": "Respond Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [930, 420]
+    }
+  ],
+  "connections": {
+    "Slack Review Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Slash Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Slash Command": {
+      "main": [
+        [
+          {
+            "node": "Valid Command?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Command?": {
+      "main": [
+        [
+          {
+            "node": "Update Review Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Review Status": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "newtuple-slack-review-local-v1",
+  "id": "newtuple-slack-review-primary",
+  "tags": [
+    {
+      "name": "newtuple"
+    },
+    {
+      "name": "primary"
+    }
+  ]
+}

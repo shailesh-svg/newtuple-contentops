@@ -1,0 +1,189 @@
+{
+  "name": "Newtuple Content Intake (OpenAI)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.CONTENTOPS_SHEET_ID}}",
+        "sheetName": "Sheet1",
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "status",
+              "lookupValue": "new"
+            }
+          ]
+        }
+      },
+      "id": "sheet-read",
+      "name": "Read New Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [420, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__SET_IN_N8N__",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const row = $json;\nconst input = {\n  idea_id: row.idea_id || 'UNTITLED',\n  source_type: row.source_type || 'workflow_lesson',\n  source_link: row.source_link || '',\n  source_text: row.raw_input || '',\n  bucket_hint: row.bucket || ''\n};\nconst prompt = `Create one LinkedIn draft in Newtuple voice. Return JSON only with keys: title, hook, post_body, cta, bucket, hashtags. Constraints: short paragraphs, operational framing, enterprise implication, no hype.`;\nreturn [{ json: { ...row, llm_input: input, llm_prompt: prompt } }];"
+      },
+      "id": "build-input",
+      "name": "Build Draft Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.OPENAI_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": $env.OPENAI_DRAFT_MODEL || \"gpt-5-mini\",\n  \"input\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are the Newtuple ContentOps drafting engine. Output strict JSON only.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": $json.llm_prompt + \" Input: \" + JSON.stringify($json.llm_input)\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "openai-draft",
+      "name": "Generate Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const text = $json.output?.[0]?.content?.[0]?.text || '{}';\nconst clean = text.replace(/^```json\\s*/i, '').replace(/```$/i, '').trim();\nlet parsed = {};\ntry { parsed = JSON.parse(clean); } catch (e) { parsed = { title: 'Draft parse warning', hook: '', post_body: clean, cta: '', bucket: 'Founder Notes', hashtags: [] }; }\nconst row = $item(0).$node['Build Draft Input'].json;\nreturn [{ json: { ...row, draft: parsed } }];"
+      },
+      "id": "parse",
+      "name": "Parse Draft JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{$env.CONTENTOPS_SHEET_ID}}",
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "idea_id": "={{$json.idea_id}}",
+            "title": "={{$json.draft.title}}",
+            "draft_text": "={{$json.draft.post_body}}",
+            "bucket": "={{$json.draft.bucket || $json.bucket || 'Founder Notes'}}",
+            "status": "needs_review"
+          },
+          "matchingColumns": ["idea_id"],
+          "schema": [
+            {
+              "id": "idea_id",
+              "displayName": "idea_id",
+              "required": false,
+              "defaultMatch": true,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "update-sheet",
+      "name": "Update Tracker Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1540, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__SET_IN_N8N__",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"*Draft Ready For Review*\\nIdea: \" + $json.idea_id + \"\\nBucket: \" + ($json.draft.bucket || 'Founder Notes') + \"\\nTitle: \" + ($json.draft.title || '') + \"\\n\\nHook:\\n\" + ($json.draft.hook || '') + \"\\n\\nDraft:\\n\" + ($json.draft.post_body || '') + \"\\n\\nCommand: /content-review <idea_id> approve|revise|reject <notes>\"\n}"
+      },
+      "id": "slack-review",
+      "name": "Send Slack Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {"main": [[{"node": "Read New Rows", "type": "main", "index": 0}]]},
+    "Read New Rows": {"main": [[{"node": "Split In Batches", "type": "main", "index": 0}]]},
+    "Split In Batches": {"main": [[{"node": "Build Draft Input", "type": "main", "index": 0}]]},
+    "Build Draft Input": {"main": [[{"node": "Generate Draft", "type": "main", "index": 0}]]},
+    "Generate Draft": {"main": [[{"node": "Parse Draft JSON", "type": "main", "index": 0}]]},
+    "Parse Draft JSON": {"main": [[{"node": "Update Tracker Row", "type": "main", "index": 0}]]},
+    "Update Tracker Row": {"main": [[{"node": "Send Slack Review", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "newtuple-content-intake-openai-v1",
+  "id": "newtuple-content-intake-openai",
+  "tags": [
+    {"name": "newtuple"},
+    {"name": "openai"},
+    {"name": "primary"}
+  ]
+}

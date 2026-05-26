@@ -1,0 +1,4 @@
+idea_id,created_at,source_type,source_link,raw_input,title,draft_text,bucket,status,reviewer,review_notes,scheduled_at,published_url,platform,hook_type,voice_score,engagement_likes,engagement_comments,engagement_shares,reach,ctr,next_repurpose_action
+CNT-T1,2026-05-25,workflow_lesson,,An AI intake workflow fails because nobody owns exception handling across agent handoffs.,,,Workflow Wins,new,,,,linkedin,,,,,,,,
+CNT-T2,2026-05-25,founder_note,,In client calls teams ask for autonomous agents, but rollout slows down due to missing ownership and guardrails.,,,Founder Notes,new,,,,linkedin,,,,,,,,
+CNT-T3,2026-05-25,blog,https://example.com/blog/how-we-ship-agentic-workflows,Repurpose this blog into operationally grounded LinkedIn drafts.,,,What Changed In AI,new,,,,linkedin,,,,,,,,

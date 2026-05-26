@@ -1,0 +1,209 @@
+{
+  "name": "Newtuple Blog Repurposing (OpenAI, Manual Trigger)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "blog-repurpose",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Blog Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const body = $json.body || $json;\nconst blog_url = body.blog_url || '';\nif (!blog_url) {\n  return [{ json: { ok: false, message: 'blog_url is required' } }];\n}\nreturn [{ json: { ok: true, blog_url, idea_id: body.idea_id || `BLOG-${Date.now()}`, raw_input: body.raw_input || '' } }];"
+      },
+      "id": "validate",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ok",
+              "leftValue": "={{$json.ok}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-valid",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [620, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$json.blog_url}}",
+        "options": {}
+      },
+      "id": "fetch",
+      "name": "Fetch Blog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, 220]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const payload = JSON.stringify($json);\nconst text = payload.replace(/<script[\\s\\S]*?<\\/script>/gi, ' ').replace(/<style[\\s\\S]*?<\\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\nconst row = $item(0).$node['Validate Input'].json;\nreturn [{ json: { ...row, article_text: text.slice(0, 16000) } }];"
+      },
+      "id": "extract",
+      "name": "Extract Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.OPENAI_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": $env.OPENAI_REPURPOSE_MODEL || \"gpt-5\",\n  \"input\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Return strict JSON only.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"From this blog text generate JSON with keys: posts (5 items with title,hook,post_body,cta,bucket), hooks (10 items), founder_note (string), carousel_outline (array). Keep Newtuple operational voice. Text: \" + $json.article_text\n    }\n  ]\n}"
+      },
+      "id": "generate",
+      "name": "Generate Repurposed Assets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1290, 220]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.output?.[0]?.content?.[0]?.text || '{}';\nconst clean = raw.replace(/^```json\\s*/i, '').replace(/```$/i, '').trim();\nlet parsed = {};\ntry { parsed = JSON.parse(clean); } catch (e) { parsed = { posts: [], hooks: [], founder_note: '', carousel_outline: [] }; }\nconst base = $item(0).$node['Extract Text'].json;\nconst out = [];\n(parsed.posts || []).slice(0, 5).forEach((p, idx) => {\n  out.push({ json: {\n    idea_id: `${base.idea_id}-P${idx + 1}`,\n    created_at: new Date().toISOString().slice(0, 10),\n    source_type: 'blog',\n    source_link: base.blog_url,\n    raw_input: base.raw_input,\n    title: p.title || `Blog Post ${idx + 1}`,\n    draft_text: p.post_body || '',\n    bucket: p.bucket || 'What Changed In AI',\n    status: 'needs_review',\n    reviewer: '',\n    review_notes: ''\n  }});\n});\nout.push({ json: {\n  idea_id: `${base.idea_id}-FN1`,\n  created_at: new Date().toISOString().slice(0, 10),\n  source_type: 'blog',\n  source_link: base.blog_url,\n  raw_input: base.raw_input,\n  title: 'Founder Note From Blog',\n  draft_text: parsed.founder_note || '',\n  bucket: 'Founder Notes',\n  status: 'needs_review',\n  reviewer: '',\n  review_notes: `Hooks: ${(parsed.hooks || []).slice(0, 10).join(' | ')}\\nCarousel: ${(parsed.carousel_outline || []).join(' | ')}`\n}});\nreturn out;"
+      },
+      "id": "explode",
+      "name": "Explode Assets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1510, 220]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{$env.CONTENTOPS_SHEET_ID}}",
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "append",
+      "name": "Append Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1730, 220],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__SET_IN_N8N__",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"Blog repurposing complete for \" + $item(0).$node['Validate Input'].json.blog_url + \". Added 5 LinkedIn drafts + 1 Founder Note to tracker.\"\n}"
+      },
+      "id": "slack",
+      "name": "Slack Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1940, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Blog repurposing started and rows appended for review.",
+        "options": {}
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [2160, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{$json.message}}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-bad",
+      "name": "Respond Bad Request",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [840, 420]
+    }
+  ],
+  "connections": {
+    "Blog Webhook": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Valid?", "type": "main", "index": 0}]]},
+    "Valid?": {"main": [[{"node": "Fetch Blog", "type": "main", "index": 0}], [{"node": "Respond Bad Request", "type": "main", "index": 0}]]},
+    "Fetch Blog": {"main": [[{"node": "Extract Text", "type": "main", "index": 0}]]},
+    "Extract Text": {"main": [[{"node": "Generate Repurposed Assets", "type": "main", "index": 0}]]},
+    "Generate Repurposed Assets": {"main": [[{"node": "Explode Assets", "type": "main", "index": 0}]]},
+    "Explode Assets": {"main": [[{"node": "Append Rows", "type": "main", "index": 0}]]},
+    "Append Rows": {"main": [[{"node": "Slack Summary", "type": "main", "index": 0}]]},
+    "Slack Summary": {"main": [[{"node": "Respond OK", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "newtuple-blog-repurpose-openai-v1",
+  "id": "newtuple-blog-repurpose-openai",
+  "tags": [
+    {"name": "newtuple"},
+    {"name": "openai"},
+    {"name": "primary"}
+  ]
+}

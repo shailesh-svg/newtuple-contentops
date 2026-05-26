@@ -1,0 +1,207 @@
+{
+  "name": "Newtuple Blog Repurposing (Local)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{$env.CONTENTOPS_SHEET_ID}}",
+        "sheetName": "Sheet1",
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "status",
+              "lookupValue": "new"
+            }
+          ]
+        }
+      },
+      "id": "read-rows",
+      "name": "Read New Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [430, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__SET_IN_N8N__",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "batch",
+      "name": "Split",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-blog",
+              "leftValue": "={{$json.source_type}}",
+              "rightValue": "blog",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-blog",
+      "name": "Is Blog Row?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$json.source_link}}",
+        "options": {}
+      },
+      "id": "fetch-blog",
+      "name": "Fetch Blog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1060, 220]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = JSON.stringify($json);\nconst text = html.replace(/<script[\\s\\S]*?<\\/script>/gi, ' ').replace(/<style[\\s\\S]*?<\\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\nconst row = $item(0).$node['Split'].json;\nreturn [{ json: { ...row, article_text: text.slice(0, 12000) } }];"
+      },
+      "id": "extract-text",
+      "name": "Extract Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1260, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.OLLAMA_BASE_URL || 'http://host.docker.internal:11434'}}/api/chat",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": $env.OLLAMA_MODEL || \"llama3.1:8b\",\n  \"stream\": false,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Return valid JSON only. No markdown.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"From this blog text, generate JSON with keys posts (array length 5 with title,hook,post_body,cta,bucket), hooks (array length 10), founder_note (string), carousel_outline (array of bullet lines). Text: \" + $json.article_text\n    }\n  ]\n}"
+      },
+      "id": "generate-assets",
+      "name": "Generate Assets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1470, 220]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.message?.content || '{}';\nconst clean = raw.replace(/^```json\\s*/i, '').replace(/```$/i, '').trim();\nlet parsed = {};\ntry { parsed = JSON.parse(clean); } catch (e) { parsed = { posts: [], hooks: [], founder_note: '', carousel_outline: [] }; }\nconst row = $item(0).$node['Extract Text'].json;\nconst base = row.idea_id || `BLOG-${Date.now()}`;\nconst out = [];\n(parsed.posts || []).slice(0, 5).forEach((p, idx) => {\n  out.push({\n    json: {\n      idea_id: `${base}-P${idx + 1}`,\n      created_at: new Date().toISOString().slice(0, 10),\n      source_type: 'blog',\n      source_link: row.source_link || '',\n      raw_input: row.raw_input || '',\n      title: p.title || `Blog Post ${idx + 1}`,\n      draft_text: p.post_body || '',\n      bucket: p.bucket || 'What Changed In AI',\n      status: 'needs_review',\n      reviewer: '',\n      review_notes: ''\n    }\n  });\n});\nout.push({\n  json: {\n    idea_id: `${base}-FN1`,\n    created_at: new Date().toISOString().slice(0, 10),\n    source_type: 'blog',\n    source_link: row.source_link || '',\n    raw_input: row.raw_input || '',\n    title: 'Founder Note From Blog',\n    draft_text: parsed.founder_note || '',\n    bucket: 'Founder Notes',\n    status: 'needs_review',\n    reviewer: '',\n    review_notes: `Hooks: ${(parsed.hooks || []).slice(0, 10).join(' | ')}\\nCarousel: ${(parsed.carousel_outline || []).join(' | ')}`\n  }\n});\nreturn out;"
+      },
+      "id": "explode-assets",
+      "name": "Explode Assets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 220]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{$env.CONTENTOPS_SHEET_ID}}",
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "append-rows",
+      "name": "Append Draft Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1890, 220],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "__SET_IN_N8N__",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"Blog repurposing complete. Added 5 LinkedIn drafts + 1 Founder Note to tracker. Review status: needs_review.\"\n}"
+      },
+      "id": "slack-summary",
+      "name": "Slack Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2090, 220]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {"main": [[{"node": "Read New Rows", "type": "main", "index": 0}]]},
+    "Read New Rows": {"main": [[{"node": "Split", "type": "main", "index": 0}]]},
+    "Split": {"main": [[{"node": "Is Blog Row?", "type": "main", "index": 0}]]},
+    "Is Blog Row?": {"main": [[{"node": "Fetch Blog", "type": "main", "index": 0}], []]},
+    "Fetch Blog": {"main": [[{"node": "Extract Text", "type": "main", "index": 0}]]},
+    "Extract Text": {"main": [[{"node": "Generate Assets", "type": "main", "index": 0}]]},
+    "Generate Assets": {"main": [[{"node": "Explode Assets", "type": "main", "index": 0}]]},
+    "Explode Assets": {"main": [[{"node": "Append Draft Rows", "type": "main", "index": 0}]]},
+    "Append Draft Rows": {"main": [[{"node": "Slack Summary", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "newtuple-blog-repurpose-local-v1",
+  "id": "newtuple-blog-repurpose-local",
+  "tags": [
+    {"name": "newtuple"},
+    {"name": "zero-cost"}
+  ]
+}

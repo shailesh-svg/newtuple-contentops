@@ -1,0 +1,28 @@
+# Copy to agent/authz.yaml and replace Slack user IDs.
+# Find user IDs in Slack profile or via event payload (starts with U...).
+
+default_role: viewer
+
+roles:
+  admin:
+    - "*"
+  editor:
+    - draft-from-idea
+    - plan-week
+    - repurpose-blog
+    - whoami
+    - help
+  reviewer:
+    - whoami
+    - approve
+    - revise
+    - reject
+    - help
+  viewer:
+    - whoami
+    - help
+
+users:
+  UADMIN12345: admin
+  UEDITOR12345: editor
+  UREVIEW12345: reviewer
