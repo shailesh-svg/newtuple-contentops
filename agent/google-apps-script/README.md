@@ -20,6 +20,19 @@ Newtuple ContentOps Agent
 
 Paste the contents of `ContentOpsAgent.gs` into the editor.
 
+If you already have the first ContentOps script deployed, update that existing
+script instead of creating a second bridge. The agent expects this token-based
+request shape:
+
+```json
+{
+  "token": "your-token",
+  "action": "read_tracker",
+  "sheetId": "spreadsheet-id",
+  "sheetName": "Content Tracker"
+}
+```
+
 ## 2. Set Token
 
 In the script, replace:
@@ -57,6 +70,7 @@ Copy the Web app URL into `agent/.env`:
 
 ```bash
 GOOGLE_APPS_SCRIPT_URL=https://script.google.com/macros/s/.../exec
+CONTENTOPS_SHEET_NAME=Content Tracker
 ```
 
 ## 4. Authorize

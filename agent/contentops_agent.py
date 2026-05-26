@@ -49,11 +49,11 @@ TOOLS = [
     },
     {
         "name": "write_tracker",
-        "description": "Update fields on an existing tracker row identified by idea_id.",
+        "description": "Update fields on an existing tracker row identified by Content ID. The parameter is named idea_id for backwards compatibility.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "idea_id": {"type": "string", "description": "The unique idea ID to update."},
+                "idea_id": {"type": "string", "description": "The Content ID to update, e.g. CNT-2026-06-29-026."},
                 "fields": {
                     "type": "object",
                     "description": (
@@ -67,11 +67,11 @@ TOOLS = [
     },
     {
         "name": "append_idea",
-        "description": "Add a new idea row to the tracker with status 'new' or 'needs_review'.",
+        "description": "Add or update a tracker row. Use a stable Content ID as idea_id.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "idea_id": {"type": "string", "description": "Unique ID, e.g. IDEA_2026_001."},
+                "idea_id": {"type": "string", "description": "Stable Content ID, e.g. CNT-2026-06-29-026."},
                 "title": {"type": "string"},
                 "bucket": {"type": "string", "description": "One of the 5 content buckets."},
                 "raw_input": {"type": "string", "description": "The source idea or notes."},

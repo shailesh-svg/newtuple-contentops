@@ -41,7 +41,7 @@ GOOGLE_AUTH_MODE=apps_script
 GOOGLE_APPS_SCRIPT_URL=https://script.google.com/macros/s/.../exec
 GOOGLE_APPS_SCRIPT_TOKEN=your_long_random_token
 CONTENTOPS_SHEET_ID=your_google_sheet_id_here
-CONTENTOPS_SHEET_NAME=Sheet1
+CONTENTOPS_SHEET_NAME=Content Tracker
 GOOGLE_DRIVE_FOLDER_ID=your_drive_folder_id_here
 ```
 
@@ -61,7 +61,7 @@ Details: `google-apps-script/README.md`
 7. Share your Drive source folder with the printed service account email as Viewer/Commenter.
 7. Set:
 - `CONTENTOPS_SHEET_ID`
-- `CONTENTOPS_SHEET_NAME=Sheet1`
+- `CONTENTOPS_SHEET_NAME=Content Tracker`
 - `GOOGLE_DRIVE_FOLDER_ID`
 
 Use:
