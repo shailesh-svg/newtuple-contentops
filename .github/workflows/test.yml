@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test Python agent
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: agent/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r agent/requirements-dev.txt
+
+      - name: Check syntax
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          paths = [p for p in Path("agent").rglob("*.py") if ".venv" not in p.parts]
+          for path in paths:
+              ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+          print(f"parsed={len(paths)}")
+          PY
+
+      - name: Lint
+        run: ruff check agent
+
+      - name: Run tests
+        run: pytest --cov=agent --cov-report=term-missing

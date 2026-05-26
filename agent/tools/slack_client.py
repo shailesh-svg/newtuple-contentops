@@ -1,9 +1,8 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import SLACK_BOT_TOKEN, SLACK_REVIEW_CHANNEL
-
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 

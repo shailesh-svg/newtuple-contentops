@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, Set
 
-from config import AUTHZ_FILE, AUTHZ_STRICT, AUTHZ_DEFAULT_ROLE, AUTHZ_ADMIN_USERS
+from config import AUTHZ_ADMIN_USERS, AUTHZ_DEFAULT_ROLE, AUTHZ_FILE, AUTHZ_STRICT
 
 try:
     import yaml

@@ -19,22 +19,21 @@ Slack bot usage (after `python main.py bot`):
   @contentops help
 """
 
-import sys
 import os
 import re
+import sys
 from datetime import datetime, timezone
 
 # Allow imports from agent/ directory
 sys.path.insert(0, os.path.dirname(__file__))
 
+from authz import AUTHZ
+from doctor import run_doctor
 from prompts import (
     build_draft_from_idea_prompt,
-    build_weekly_plan_prompt,
     build_repurpose_blog_prompt,
+    build_weekly_plan_prompt,
 )
-from doctor import run_doctor
-from authz import AUTHZ
-
 
 # ─── Command handlers ────────────────────────────────────────────────────────
 
@@ -89,12 +88,28 @@ def _normalize_status(status: str) -> str:
         "revise": "Needs Revision",
         "rejected": "Rejected",
         "reject": "Rejected",
-        "needs_review": "needs_review",
-        "new": "new",
-        "published": "published",
-        "scheduled": "scheduled",
+        "needs_review": "Needs Review",
+        "new": "Idea",
+        "published": "Published",
+        "scheduled": "Scheduled",
     }
     return mapping.get(raw, status)
+
+
+def _extract_content_id(text: str) -> str:
+    """Extract the tracker Content ID from Slack/review message text."""
+    patterns = [
+        r"content[_\s-]*id[:=\s`]*([A-Za-z0-9_-]+)",
+        r"idea[_\s-]*id[:=\s`]*([A-Za-z0-9_-]+)",
+        r"idea[:=\s`]*([A-Za-z0-9_-]+)",
+        r"`([A-Za-z]{2,10}[-_][A-Za-z0-9_-]+)`",
+        r"\b([A-Za-z]{2,10}[-_][A-Za-z0-9_-]+)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""
 
 
 def _parse_and_run(command: str, args: list) -> str:
@@ -132,6 +147,7 @@ def _parse_and_run(command: str, args: list) -> str:
 def cmd_google_email() -> str:
     import json
     from pathlib import Path
+
     from config import GOOGLE_SERVICE_ACCOUNT_FILE
 
     path = Path(GOOGLE_SERVICE_ACCOUNT_FILE)
@@ -152,9 +168,9 @@ def cmd_google_email() -> str:
 # ─── Slack Socket Mode bot ────────────────────────────────────────────────────
 
 def start_slack_bot():
+    from config import SLACK_APP_TOKEN, SLACK_BOT_TOKEN
     from slack_bolt import App
     from slack_bolt.adapter.socket_mode import SocketModeHandler
-    from config import SLACK_BOT_TOKEN, SLACK_APP_TOKEN
 
     app = App(token=SLACK_BOT_TOKEN)
 
@@ -266,7 +282,7 @@ def start_slack_bot():
             )
             return
 
-        idea_id = _extract_idea_id(original_text)
+        idea_id = _extract_content_id(original_text)
         if idea_id:
             fields = {"status": status}
             fields["reviewer"] = reviewer_user_id
@@ -286,20 +302,6 @@ def start_slack_bot():
         client.chat_postMessage(
             channel=channel, thread_ts=thread_ts, text=reply, mrkdwn=True
         )
-
-    def _extract_idea_id(text: str) -> str:
-        # Common formats: "Idea: CNT-T1", "`IDEA_2026_001`", "idea_id=CNT-001"
-        patterns = [
-            r"idea[_\s-]*id[:=\s`]*([A-Za-z0-9_-]+)",
-            r"idea[:=\s`]*([A-Za-z0-9_-]+)",
-            r"`([A-Za-z]{2,10}[-_][A-Za-z0-9_-]+)`",
-            r"\b([A-Za-z]{2,10}[-_][A-Za-z0-9_-]+)\b",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
-            if match:
-                return match.group(1)
-        return ""
 
     print("ContentOps bot starting in Socket Mode...")
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)

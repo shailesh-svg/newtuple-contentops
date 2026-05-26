@@ -1,18 +1,17 @@
-from pathlib import Path
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from apps_script_bridge import AppsScriptBridge
 from config import (
-    GOOGLE_AUTH_MODE,
-    GOOGLE_SERVICE_ACCOUNT_FILE,
     CONTENTOPS_SHEET_ID,
     CONTENTOPS_SHEET_NAME,
-    GOOGLE_APPS_SCRIPT_URL,
     GOOGLE_APPS_SCRIPT_TOKEN,
+    GOOGLE_APPS_SCRIPT_URL,
+    GOOGLE_AUTH_MODE,
+    GOOGLE_SERVICE_ACCOUNT_FILE,
 )
-from apps_script_bridge import AppsScriptBridge
-
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 

@@ -10,20 +10,18 @@ from typing import Any
 
 import anthropic
 import openai
-
 from config import (
     AI_PROVIDER,
     ANTHROPIC_API_KEY,
-    OPENAI_API_KEY,
     CLAUDE_MODEL,
+    OPENAI_API_KEY,
     OPENAI_MODEL,
 )
 from prompts import build_system_prompt
-from tools.sheets import read_tracker, write_tracker, append_idea
-from tools.drive import read_drive_doc, list_drive_files
-from tools.repo_tools import read_repo_file, list_repo_files
+from tools.drive import list_drive_files, read_drive_doc
+from tools.repo_tools import list_repo_files, read_repo_file
+from tools.sheets import append_idea, read_tracker, write_tracker
 from tools.slack_client import post_to_slack, read_slack_thread
-
 
 # Tool definitions exposed to the model
 TOOLS = [

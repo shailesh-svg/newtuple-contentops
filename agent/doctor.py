@@ -5,24 +5,24 @@ Run:
   python main.py doctor
 """
 
-from pathlib import Path
 import re
+from pathlib import Path
 
+from authz import AUTHZ
 from config import (
     ANTHROPIC_API_KEY,
-    OPENAI_API_KEY,
-    GOOGLE_AUTH_MODE,
-    GOOGLE_SERVICE_ACCOUNT_FILE,
-    CONTENTOPS_SHEET_ID,
-    GOOGLE_DRIVE_FOLDER_ID,
-    GOOGLE_APPS_SCRIPT_URL,
-    GOOGLE_APPS_SCRIPT_TOKEN,
-    SLACK_BOT_TOKEN,
-    SLACK_APP_TOKEN,
     AUTHZ_FILE,
     AUTHZ_STRICT,
+    CONTENTOPS_SHEET_ID,
+    GOOGLE_APPS_SCRIPT_TOKEN,
+    GOOGLE_APPS_SCRIPT_URL,
+    GOOGLE_AUTH_MODE,
+    GOOGLE_DRIVE_FOLDER_ID,
+    GOOGLE_SERVICE_ACCOUNT_FILE,
+    OPENAI_API_KEY,
+    SLACK_APP_TOKEN,
+    SLACK_BOT_TOKEN,
 )
-from authz import AUTHZ
 
 
 def _ok(label: str, details: str = "") -> str:
@@ -175,7 +175,15 @@ def run_doctor() -> str:
                     )
                 )
     else:
-        lines.append(_fail("AUTHZ_FILE missing", AUTHZ_FILE))
+        if AUTHZ_STRICT and len(AUTHZ.user_roles) > 0:
+            lines.append(
+                _ok(
+                    "AUTHZ_FILE missing",
+                    f"{AUTHZ_FILE} (using AUTHZ_ADMIN_USERS, users={len(AUTHZ.user_roles)})",
+                )
+            )
+        else:
+            lines.append(_fail("AUTHZ_FILE missing", AUTHZ_FILE))
 
     # Live checks (best effort)
     if anthropic_ready:
