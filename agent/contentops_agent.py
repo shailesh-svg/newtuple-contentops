@@ -296,7 +296,14 @@ def run(user_prompt: str) -> str:
         except Exception as primary_error:
             if ANTHROPIC_API_KEY:
                 print(f"[warn] OpenAI failed, falling back to Claude: {primary_error}")
-                return run_agent_claude(user_prompt)
+                try:
+                    return run_agent_claude(user_prompt)
+                except Exception as fallback_error:
+                    raise RuntimeError(
+                        "OpenAI failed and Claude fallback also failed. "
+                        f"OpenAI error: {primary_error}. "
+                        f"Claude error: {fallback_error}."
+                    ) from fallback_error
             raise
 
     try:
@@ -304,5 +311,12 @@ def run(user_prompt: str) -> str:
     except Exception as primary_error:
         if OPENAI_API_KEY:
             print(f"[warn] Claude failed, falling back to OpenAI: {primary_error}")
-            return run_agent_openai(user_prompt)
+            try:
+                return run_agent_openai(user_prompt)
+            except Exception as fallback_error:
+                raise RuntimeError(
+                    "Claude failed and OpenAI fallback also failed. "
+                    f"Claude error: {primary_error}. "
+                    f"OpenAI error: {fallback_error}."
+                ) from fallback_error
         raise

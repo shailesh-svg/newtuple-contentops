@@ -144,6 +144,23 @@ def _parse_and_run(command: str, args: list) -> str:
     return f"Unknown command: `{command}`. Try `help`."
 
 
+def _safe_error_message(command: str, error: Exception) -> str:
+    """Return a Slack-safe error message without leaking credentials."""
+    message = str(error)
+    redactions = [
+        r"sk-[A-Za-z0-9_-]+",
+        r"xox[baprs]-[A-Za-z0-9-]+",
+        r"xapp-[A-Za-z0-9-]+",
+    ]
+    for pattern in redactions:
+        message = re.sub(pattern, "[redacted]", message)
+    return (
+        f"Command `{command}` failed before producing a result.\n"
+        f"*Error:* `{type(error).__name__}: {message}`\n\n"
+        "Run `python main.py doctor` locally if this looks like a provider or credential issue."
+    )
+
+
 def cmd_google_email() -> str:
     import json
     from pathlib import Path
@@ -204,7 +221,10 @@ def start_slack_bot():
         # Acknowledge immediately so Slack doesn't time out
         say(text=f"On it — running `{command}`...", thread_ts=thread_ts)
 
-        result = _parse_and_run(command, args)
+        try:
+            result = _parse_and_run(command, args)
+        except Exception as e:
+            result = _safe_error_message(command, e)
 
         # Post result back in thread
         client.chat_postMessage(

@@ -20,6 +20,7 @@ from config import (
     GOOGLE_DRIVE_FOLDER_ID,
     GOOGLE_SERVICE_ACCOUNT_FILE,
     OPENAI_API_KEY,
+    OPENAI_MODEL,
     SLACK_APP_TOKEN,
     SLACK_BOT_TOKEN,
 )
@@ -194,9 +195,12 @@ def run_doctor() -> str:
                 import anthropic
 
                 c = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-                # Lightweight sanity call
-                c.models.list(limit=1)
-                lines.append(_ok("Anthropic API reachable"))
+                c.messages.create(
+                    model="claude-3-5-haiku-latest",
+                    max_tokens=1,
+                    messages=[{"role": "user", "content": "ping"}],
+                )
+                lines.append(_ok("Anthropic generation check passed"))
             except ModuleNotFoundError:
                 lines.append(_fail("Anthropic SDK missing", "run: pip install -r requirements.txt"))
             except Exception as e:
@@ -210,8 +214,12 @@ def run_doctor() -> str:
                 import openai
 
                 c = openai.OpenAI(api_key=OPENAI_API_KEY)
-                c.models.list()
-                lines.append(_ok("OpenAI API reachable"))
+                c.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    max_tokens=1,
+                    messages=[{"role": "user", "content": "ping"}],
+                )
+                lines.append(_ok("OpenAI generation check passed", f"model={OPENAI_MODEL}"))
             except ModuleNotFoundError:
                 lines.append(_fail("OpenAI SDK missing", "run: pip install -r requirements.txt"))
             except Exception as e:
