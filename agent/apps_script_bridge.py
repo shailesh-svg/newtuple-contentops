@@ -49,7 +49,8 @@ class AppsScriptBridge:
         return self.call("read_tracker", {"status": status, "limit": limit})
 
     def write_tracker(self, content_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
-        return self.call("write_tracker", {"content_id": content_id, "fields": fields})
+        # Send both content_id and idea_id for backward compat with older deployed scripts
+        return self.call("write_tracker", {"content_id": content_id, "idea_id": content_id, "fields": fields})
 
     def upsert_tracker_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return self.call("upsert_tracker_row", {"row": row})

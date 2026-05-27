@@ -230,7 +230,20 @@ def append_idea(
     }
 
     if GOOGLE_AUTH_MODE == "apps_script":
-        return _bridge().upsert_tracker_row(row)
+        bridge = _bridge()
+        # Try upsert_tracker_row (new script), fall back to append_idea action (old script)
+        result = bridge.upsert_tracker_row(row)
+        if isinstance(result, dict) and "Unknown action" in result.get("error", ""):
+            result = bridge.call("append_idea", {
+                "content_id": content_id,
+                "idea_id": content_id,
+                "title": title,
+                "bucket": bucket,
+                "raw_input": raw_input,
+                "source_type": source_type,
+                "status": _normalize_status(status),
+            })
+        return result
 
     try:
         service = _get_service()

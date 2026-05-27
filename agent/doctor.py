@@ -10,6 +10,7 @@ from pathlib import Path
 
 from authz import AUTHZ
 from config import (
+    AI_PROVIDER,
     ANTHROPIC_API_KEY,
     AUTHZ_FILE,
     AUTHZ_STRICT,
@@ -19,6 +20,8 @@ from config import (
     GOOGLE_AUTH_MODE,
     GOOGLE_DRIVE_FOLDER_ID,
     GOOGLE_SERVICE_ACCOUNT_FILE,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
     OPENAI_API_KEY,
     OPENAI_MODEL,
     SLACK_APP_TOKEN,
@@ -224,6 +227,25 @@ def run_doctor() -> str:
                 lines.append(_fail("OpenAI SDK missing", "run: pip install -r requirements.txt"))
             except Exception as e:
                 lines.append(_fail("OpenAI API check failed", _redact_error(e)))
+
+    if AI_PROVIDER == "ollama":
+        try:
+            import openai
+
+            c = openai.OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+            c.chat.completions.create(
+                model=OLLAMA_MODEL,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}],
+            )
+            lines.append(_ok("Ollama check passed", f"model={OLLAMA_MODEL} @ {OLLAMA_BASE_URL}"))
+        except ModuleNotFoundError:
+            lines.append(_fail("OpenAI SDK missing", "run: pip install -r requirements.txt"))
+        except Exception as e:
+            lines.append(_fail(
+                "Ollama check failed",
+                f"{_redact_error(e)} — is Ollama running? Try: ollama serve",
+            ))
 
     if slack_bot_ready:
         if not _looks_slack_bot_token(SLACK_BOT_TOKEN):

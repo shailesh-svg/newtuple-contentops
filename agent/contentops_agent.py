@@ -1,8 +1,9 @@
 """
-ContentOps Agent — agentic loop powered by Claude (primary) or OpenAI (secondary).
+ContentOps Agent — agentic loop powered by Claude (primary), OpenAI, or Ollama (local).
 
 Claude handles: strategy, narrative, founder voice, long-form reasoning.
 OpenAI handles: structured JSON extraction, classification (when configured).
+Ollama: local models for testing without API costs (set AI_PROVIDER=ollama).
 """
 
 import json
@@ -14,6 +15,8 @@ from config import (
     AI_PROVIDER,
     ANTHROPIC_API_KEY,
     CLAUDE_MODEL,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
     OPENAI_API_KEY,
     OPENAI_MODEL,
 )
@@ -167,26 +170,62 @@ TOOLS = [
 
 
 def _dispatch_tool(name: str, inputs: dict) -> Any:
-    """Route tool calls to their implementations."""
-    if name == "read_tracker":
-        return read_tracker(**inputs)
-    if name == "write_tracker":
-        return write_tracker(**inputs)
-    if name == "append_idea":
-        return append_idea(**inputs)
-    if name == "read_drive_doc":
-        return read_drive_doc(**inputs)
-    if name == "list_drive_files":
-        return list_drive_files(**inputs)
-    if name == "read_repo_file":
-        return read_repo_file(**inputs)
-    if name == "list_repo_files":
-        return list_repo_files(**inputs)
-    if name == "post_to_slack":
-        return post_to_slack(**inputs)
-    if name == "read_slack_thread":
-        return read_slack_thread(**inputs)
-    return {"error": f"Unknown tool: {name}"}
+    """Route tool calls, filtering args and filling in safe defaults.
+
+    Smaller models (Ollama) sometimes pass wrong kwargs or omit required ones.
+    We strip unexpected args and provide fallbacks so the agentic loop never
+    crashes on a TypeError — the model can see the result and continue.
+    """
+    def _only(d: dict, *keys) -> dict:
+        return {k: v for k, v in d.items() if k in keys}
+
+    try:
+        if name == "read_tracker":
+            return read_tracker(**_only(inputs, "status", "limit"))
+
+        if name == "write_tracker":
+            return write_tracker(**_only(inputs, "idea_id", "fields"))
+
+        if name == "append_idea":
+            f = _only(inputs, "idea_id", "title", "bucket", "raw_input", "source_type", "status")
+            # Fill missing required fields so the model doesn't hard-fail
+            if "raw_input" not in f:
+                f["raw_input"] = f.get("title", inputs.get("hook", ""))
+            if "title" not in f:
+                f["title"] = str(f.get("raw_input", ""))[:80]
+            if "bucket" not in f:
+                f["bucket"] = "Founder Notes"
+            if "idea_id" not in f:
+                from datetime import datetime, timezone
+                f["idea_id"] = f"CNT-{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H%M%S')}"
+            return append_idea(**f)
+
+        if name == "read_drive_doc":
+            return read_drive_doc(**_only(inputs, "doc_id"))
+
+        if name == "list_drive_files":
+            return list_drive_files(**_only(inputs, "query"))
+
+        if name == "read_repo_file":
+            return read_repo_file(**_only(inputs, "path"))
+
+        if name == "list_repo_files":
+            return list_repo_files(**_only(inputs, "directory"))
+
+        if name == "post_to_slack":
+            return post_to_slack(**_only(inputs, "text", "idea_id"))
+
+        if name == "read_slack_thread":
+            return read_slack_thread(**_only(inputs, "thread_ts", "channel"))
+
+        return {"error": f"Unknown tool: {name}"}
+
+    except Exception as e:
+        # Return error as data so the agentic loop can continue
+        return {"error": f"Tool '{name}' failed: {e}. Check inputs and retry."}
+
+
+MAX_TOOL_ITERATIONS = 20  # prevent runaway loops on repeated tool failures
 
 
 def run_agent_claude(user_prompt: str) -> str:
@@ -198,7 +237,7 @@ def run_agent_claude(user_prompt: str) -> str:
     system = build_system_prompt()
     messages = [{"role": "user", "content": user_prompt}]
 
-    while True:
+    for _ in range(MAX_TOOL_ITERATIONS):
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=8096,
@@ -234,6 +273,8 @@ def run_agent_claude(user_prompt: str) -> str:
             # Unexpected stop reason — return what we have
             return text_output or f"[stopped: {response.stop_reason}]"
 
+    return "[error] Agent hit the tool iteration limit — repeated tool failures. Check credentials and tracker connectivity."
+
 
 def run_agent_openai(user_prompt: str) -> str:
     """Agentic loop using OpenAI with function calling."""
@@ -258,7 +299,7 @@ def run_agent_openai(user_prompt: str) -> str:
         {"role": "user", "content": user_prompt},
     ]
 
-    while True:
+    for _ in range(MAX_TOOL_ITERATIONS):
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             tools=openai_tools,
@@ -285,10 +326,68 @@ def run_agent_openai(user_prompt: str) -> str:
         else:
             return msg.content or f"[stopped: {choice.finish_reason}]"
 
+    return "[error] Agent hit the tool iteration limit — repeated tool failures. Check credentials and tracker connectivity."
+
+
+def run_agent_ollama(user_prompt: str) -> str:
+    """Agentic loop using a local Ollama model via its OpenAI-compatible API."""
+    client = openai.OpenAI(
+        base_url=OLLAMA_BASE_URL,
+        api_key="ollama",  # required by SDK but unused by Ollama
+    )
+    system = build_system_prompt()
+
+    openai_tools = [
+        {"type": "function", "function": {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": t["input_schema"],
+        }}
+        for t in TOOLS
+    ]
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    for _ in range(MAX_TOOL_ITERATIONS):
+        response = client.chat.completions.create(
+            model=OLLAMA_MODEL,
+            tools=openai_tools,
+            messages=messages,
+        )
+
+        choice = response.choices[0]
+        msg = choice.message
+        messages.append(msg)
+
+        if choice.finish_reason == "stop":
+            return msg.content or ""
+
+        if choice.finish_reason == "tool_calls":
+            for tc in msg.tool_calls:
+                inputs = json.loads(tc.function.arguments)
+                result = _dispatch_tool(tc.function.name, inputs)
+                print(f"[tool/ollama] {tc.function.name} → {json.dumps(result)[:200]}")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(result),
+                })
+        else:
+            return msg.content or f"[stopped: {choice.finish_reason}]"
+
+    return "[error] Agent hit the tool iteration limit — repeated tool failures. Check credentials and tracker connectivity."
+
 
 def run(user_prompt: str) -> str:
-    """Entry point — routes to primary provider and falls back if available."""
-    provider = (AI_PROVIDER or "claude").strip().lower()
+    """Entry point — routes to the configured AI provider."""
+    provider = (AI_PROVIDER or "openai").strip().lower()
+
+    if provider == "ollama":
+        print(f"[provider] ollama ({OLLAMA_MODEL} @ {OLLAMA_BASE_URL})")
+        return run_agent_ollama(user_prompt)
 
     if provider == "openai":
         try:

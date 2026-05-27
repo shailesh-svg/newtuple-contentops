@@ -35,13 +35,17 @@ def _env(name: str, default: str = "") -> str:
 REPO_ROOT = Path(__file__).parent.parent
 CONTENTOPS_DIR = REPO_ROOT / "contentops"
 
-# AI providers — Claude is primary, OpenAI is secondary
+# AI providers — Claude is primary, OpenAI is secondary, Ollama for local testing
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = _env("OPENAI_API_KEY")
-AI_PROVIDER = _env("AI_PROVIDER", "claude")  # "claude" | "openai"
+AI_PROVIDER = _env("AI_PROVIDER", "claude")  # "claude" | "openai" | "ollama"
 
 CLAUDE_MODEL = _env("CLAUDE_MODEL", "claude-opus-4-7")
 OPENAI_MODEL = _env("OPENAI_MODEL", "gpt-4o")
+
+# Ollama (local) — uses OpenAI-compatible API
+OLLAMA_BASE_URL = _env("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = _env("OLLAMA_MODEL", "llama3.1")
 
 # Google
 GOOGLE_AUTH_MODE = _env("GOOGLE_AUTH_MODE", "service_account").lower()

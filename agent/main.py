@@ -141,7 +141,10 @@ def _parse_and_run(command: str, args: list) -> str:
     if command == "google-email":
         return cmd_google_email()
 
-    return f"Unknown command: `{command}`. Try `help`."
+    # Natural language fallback — pass the full message to the agent
+    from contentops_agent import run
+    full_message = (command + " " + " ".join(args)).strip()
+    return run(full_message)
 
 
 def _safe_error_message(command: str, error: Exception) -> str:
@@ -205,21 +208,30 @@ def start_slack_bot():
             say(text=cmd_help(), thread_ts=thread_ts)
             return
 
-        command = parts[0].lower()
-        args = parts[1:]
+        # Strip backticks and angle brackets — Slack sometimes auto-formats text
+        command = parts[0].lower().strip("`<>").strip()
+        args = [a.strip("`<>") for a in parts[1:]]
 
         if command == "whoami":
             say(text=f"Your Slack user ID is `{user_id}`", thread_ts=thread_ts)
             return
 
-        if not AUTHZ.can_run_command(user_id, command):
+        known_commands = {"draft-from-idea", "plan-week", "repurpose-blog", "update-status", "help", "doctor", "google-email"}
+        is_known = command in known_commands
+
+        if is_known and not AUTHZ.can_run_command(user_id, command):
             denial = AUTHZ.auth_message(user_id, command)
             if denial:
                 say(text=denial, thread_ts=thread_ts)
                 return
+        elif not is_known and not AUTHZ.can_run_command(user_id, "draft-from-idea"):
+            # Natural language requires at least editor role
+            say(text=AUTHZ.auth_message(user_id, "draft-from-idea"), thread_ts=thread_ts)
+            return
 
         # Acknowledge immediately so Slack doesn't time out
-        say(text=f"On it — running `{command}`...", thread_ts=thread_ts)
+        label = command if is_known else "your request"
+        say(text=f"On it — running `{label}`...", thread_ts=thread_ts)
 
         try:
             result = _parse_and_run(command, args)
