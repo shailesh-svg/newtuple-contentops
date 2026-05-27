@@ -19,6 +19,7 @@ Slack bot usage (after `python main.py bot`):
   @contentops help
 """
 
+import json
 import os
 import re
 import sys
@@ -298,11 +299,10 @@ def start_slack_bot():
             _handle_approval(channel, thread_ts, "Rejected", reason, client, user_id)
 
     def _handle_approval(channel, thread_ts, status, notes, client, reviewer_user_id):
-        """Update the tracker and confirm in thread when a reviewer acts."""
+        """Update the tracker and confirm in thread when a reviewer uses text reply."""
         from tools.sheets import write_tracker
 
         try:
-            # The idea_id was embedded in the original message text — retrieve it
             history = client.conversations_replies(channel=channel, ts=thread_ts)
             original_text = history["messages"][0].get("text", "")
         except Exception as e:
@@ -315,24 +315,157 @@ def start_slack_bot():
             return
 
         idea_id = _extract_content_id(original_text)
+        _commit_approval(channel, thread_ts, status, notes, client, reviewer_user_id, idea_id)
+
+    def _commit_approval(channel, message_ts, status, notes, client, reviewer_user_id, idea_id):
+        """Write approval decision to tracker and post confirmation in thread."""
+        from tools.sheets import write_tracker
+        from tools.slack_client import update_draft_message_status
+
+        status_icon = {"Approved": "✅", "Needs Revision": "✏️", "Rejected": "❌"}.get(status, "")
+
         if idea_id:
-            fields = {"status": status}
-            fields["reviewer"] = reviewer_user_id
-            fields["review_action_ts"] = datetime.now(timezone.utc).isoformat()
+            fields = {
+                "status": status,
+                "reviewer": reviewer_user_id,
+                "review_action_ts": datetime.now(timezone.utc).isoformat(),
+            }
             if notes:
                 fields["review_notes"] = notes
             update = write_tracker(idea_id, fields)
             if "error" in update:
                 reply = f"Could not update tracker for `{idea_id}`: {update['error']}"
             else:
-                reply = f"Tracker updated — `{idea_id}` → `{status}`"
+                reply = f"{status_icon} `{idea_id}` → *{status}*"
                 if notes:
-                    reply += f"\nNotes: {notes}"
+                    reply += f"\n> {notes}"
+                # Replace action buttons with a status badge on the original message
+                update_draft_message_status(channel, message_ts, status, reviewer_user_id)
         else:
-            reply = f"Status recorded: `{status}`. (Could not extract idea_id to update tracker — update manually.)"
+            reply = f"{status_icon} Status recorded: *{status}*. (Could not extract idea ID — update tracker manually.)"
 
         client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts, text=reply, mrkdwn=True
+            channel=channel, thread_ts=message_ts, text=reply, mrkdwn=True
+        )
+
+    # ── Button action handlers ─────────────────────────────────────────────────
+
+    @app.action("approve_draft")
+    def handle_approve_button(ack, body, client):
+        ack()
+        idea_id = body["actions"][0]["value"]
+        user_id = body["user"]["id"]
+        channel = body["channel"]["id"]
+        message_ts = body["message"]["ts"]
+
+        if not AUTHZ.can_review(user_id, "approve"):
+            client.chat_postEphemeral(
+                channel=channel, user=user_id,
+                text=AUTHZ.auth_message(user_id, "approve"),
+            )
+            return
+        _commit_approval(channel, message_ts, "Approved", "", client, user_id, idea_id)
+
+    @app.action("revise_draft")
+    def handle_revise_button(ack, body, client):
+        ack()
+        idea_id = body["actions"][0]["value"]
+        channel = body["channel"]["id"]
+        message_ts = body["message"]["ts"]
+        user_id = body["user"]["id"]
+
+        if not AUTHZ.can_review(user_id, "revise"):
+            client.chat_postEphemeral(
+                channel=channel, user=user_id,
+                text=AUTHZ.auth_message(user_id, "revise"),
+            )
+            return
+        client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "revise_modal",
+                "private_metadata": json.dumps(
+                    {"idea_id": idea_id, "channel": channel, "message_ts": message_ts}
+                ),
+                "title": {"type": "plain_text", "text": "Request Revision"},
+                "submit": {"type": "plain_text", "text": "Submit"},
+                "close": {"type": "plain_text", "text": "Cancel"},
+                "blocks": [
+                    {
+                        "type": "input",
+                        "block_id": "notes_block",
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "notes_input",
+                            "multiline": True,
+                            "placeholder": {"type": "plain_text", "text": "What needs to change?"},
+                        },
+                        "label": {"type": "plain_text", "text": "Revision notes"},
+                    }
+                ],
+            },
+        )
+
+    @app.action("reject_draft")
+    def handle_reject_button(ack, body, client):
+        ack()
+        idea_id = body["actions"][0]["value"]
+        channel = body["channel"]["id"]
+        message_ts = body["message"]["ts"]
+        user_id = body["user"]["id"]
+
+        if not AUTHZ.can_review(user_id, "reject"):
+            client.chat_postEphemeral(
+                channel=channel, user=user_id,
+                text=AUTHZ.auth_message(user_id, "reject"),
+            )
+            return
+        client.views_open(
+            trigger_id=body["trigger_id"],
+            view={
+                "type": "modal",
+                "callback_id": "reject_modal",
+                "private_metadata": json.dumps(
+                    {"idea_id": idea_id, "channel": channel, "message_ts": message_ts}
+                ),
+                "title": {"type": "plain_text", "text": "Reject Draft"},
+                "submit": {"type": "plain_text", "text": "Reject"},
+                "close": {"type": "plain_text", "text": "Cancel"},
+                "blocks": [
+                    {
+                        "type": "input",
+                        "block_id": "reason_block",
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "reason_input",
+                            "multiline": True,
+                            "placeholder": {"type": "plain_text", "text": "Why is this being rejected?"},
+                        },
+                        "label": {"type": "plain_text", "text": "Rejection reason"},
+                    }
+                ],
+            },
+        )
+
+    @app.view("revise_modal")
+    def handle_revise_submit(ack, body, client):
+        ack()
+        meta = json.loads(body["view"]["private_metadata"])
+        notes = body["view"]["state"]["values"]["notes_block"]["notes_input"]["value"] or ""
+        user_id = body["user"]["id"]
+        _commit_approval(
+            meta["channel"], meta["message_ts"], "Needs Revision", notes, client, user_id, meta["idea_id"]
+        )
+
+    @app.view("reject_modal")
+    def handle_reject_submit(ack, body, client):
+        ack()
+        meta = json.loads(body["view"]["private_metadata"])
+        reason = body["view"]["state"]["values"]["reason_block"]["reason_input"]["value"] or ""
+        user_id = body["user"]["id"]
+        _commit_approval(
+            meta["channel"], meta["message_ts"], "Rejected", reason, client, user_id, meta["idea_id"]
         )
 
     print("ContentOps bot starting in Socket Mode...")
