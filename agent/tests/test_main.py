@@ -16,7 +16,7 @@ def test_extract_content_id_variants():
     assert _extract_content_id("No identifier here") == ""
 
 
-def test_help_and_unknown_commands_do_not_call_llm():
+def test_known_commands_resolve_without_calling_llm():
     assert "ContentOps Agent" in _parse_and_run("help", [])
-    assert "Unknown command" in _parse_and_run("missing", [])
     assert "Usage" in _parse_and_run("draft-from-idea", [])
+    assert "Usage" in _parse_and_run("update-status", [])

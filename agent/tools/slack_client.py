@@ -15,11 +15,22 @@ def _client() -> WebClient:
 
 
 def _chunk_text(text: str, max_len: int = _SECTION_LIMIT) -> list:
-    """Split text into paragraph-boundary chunks that fit in one section block."""
+    """Split text into chunks that fit in one section block.
+
+    Splits at paragraph boundaries first; if a single paragraph still exceeds
+    max_len it is hard-split at the character limit.
+    """
     if len(text) <= max_len:
         return [text]
     chunks, current = [], ""
     for para in text.split("\n\n"):
+        # Hard-split paragraphs that are themselves too long
+        while len(para) > max_len:
+            if current:
+                chunks.append(current.strip())
+                current = ""
+            chunks.append(para[:max_len])
+            para = para[max_len:]
         if len(current) + len(para) + 2 > max_len:
             if current:
                 chunks.append(current.strip())

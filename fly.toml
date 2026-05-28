@@ -1,0 +1,41 @@
+# Fly.io deployment config for the ContentOps Slack bot.
+# Socket Mode — no inbound HTTP needed, no [[services]] block required.
+#
+# Deploy:
+#   fly launch          (first time — creates app and provisions)
+#   fly deploy          (subsequent deploys)
+#
+# Set secrets (one-time):
+#   fly secrets set \
+#     ANTHROPIC_API_KEY=... \
+#     OPENAI_API_KEY=... \
+#     SLACK_BOT_TOKEN=... \
+#     SLACK_APP_TOKEN=... \
+#     GOOGLE_APPS_SCRIPT_URL=... \
+#     GOOGLE_APPS_SCRIPT_TOKEN=... \
+#     CONTENTOPS_SHEET_ID=... \
+#     GOOGLE_DRIVE_FOLDER_ID=...
+#
+# Non-secret env vars live here under [env].
+
+app = "newtuple-contentops"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  strategy = "immediate"
+
+[env]
+  AI_PROVIDER        = "openai"
+  OPENAI_MODEL       = "gpt-4o"
+  GOOGLE_AUTH_MODE   = "apps_script"
+  CONTENTOPS_SHEET_NAME = "Content Tracker"
+  SLACK_REVIEW_CHANNEL  = "#contentops-review"
+  AUTHZ_STRICT       = "true"
+  AUTHZ_DEFAULT_ROLE = "viewer"
+
+[[vm]]
+  size   = "shared-cpu-1x"
+  memory = "256mb"

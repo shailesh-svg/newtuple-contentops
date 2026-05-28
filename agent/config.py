@@ -1,5 +1,12 @@
+import logging
 import os
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 try:
     from dotenv import load_dotenv
@@ -76,3 +83,45 @@ AUTHZ_ADMIN_USERS = [
     for u in _env("AUTHZ_ADMIN_USERS").split(",")
     if u.strip()
 ]
+
+
+def validate_startup() -> None:
+    """Fail fast with a clear message if required credentials are missing.
+
+    Call this at the top of start_slack_bot() so misconfiguration is caught
+    immediately rather than surfacing as a cryptic error on the first tool call.
+    """
+    _log = logging.getLogger(__name__)
+    errors: list = []
+
+    provider = AI_PROVIDER.lower()
+    if provider not in {"claude", "openai", "ollama"}:
+        errors.append(f"AI_PROVIDER must be claude, openai, or ollama — got {provider!r}")
+    if provider == "claude" and not ANTHROPIC_API_KEY:
+        errors.append("ANTHROPIC_API_KEY is required when AI_PROVIDER=claude")
+    if provider == "openai" and not OPENAI_API_KEY:
+        errors.append("OPENAI_API_KEY is required when AI_PROVIDER=openai")
+    if provider == "openai" and not OPENAI_MODEL:
+        errors.append("OPENAI_MODEL is required when AI_PROVIDER=openai (e.g. gpt-4o)")
+    if not SLACK_BOT_TOKEN:
+        errors.append("SLACK_BOT_TOKEN is required")
+    if not SLACK_APP_TOKEN:
+        errors.append("SLACK_APP_TOKEN is required for Socket Mode")
+    if GOOGLE_AUTH_MODE == "apps_script":
+        if not GOOGLE_APPS_SCRIPT_URL:
+            errors.append("GOOGLE_APPS_SCRIPT_URL is required when GOOGLE_AUTH_MODE=apps_script")
+        if not GOOGLE_APPS_SCRIPT_TOKEN:
+            errors.append("GOOGLE_APPS_SCRIPT_TOKEN is required when GOOGLE_AUTH_MODE=apps_script")
+    elif GOOGLE_AUTH_MODE == "service_account":
+        if not GOOGLE_SERVICE_ACCOUNT_FILE:
+            errors.append("GOOGLE_SERVICE_ACCOUNT_FILE is required when GOOGLE_AUTH_MODE=service_account")
+    if not CONTENTOPS_SHEET_ID:
+        errors.append("CONTENTOPS_SHEET_ID is required")
+
+    if errors:
+        for err in errors:
+            _log.error("config: %s", err)
+        raise SystemExit(
+            f"\n[contentops] {len(errors)} config error(s) — fix agent/.env and restart:\n"
+            + "\n".join(f"  • {e}" for e in errors)
+        )

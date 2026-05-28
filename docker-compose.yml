@@ -1,25 +1,26 @@
+# Local development compose file.
+# Copy agent/.env.example → agent/.env and fill in credentials before running.
+#
+#   docker compose up                  # agent only (uses OpenAI / Claude API)
+#   docker compose --profile ollama up # agent + local Ollama
+
 services:
-  n8n:
-    image: n8nio/n8n:latest
-    ports:
-      - "5678:5678"
-    environment:
-      - N8N_HOST=localhost
-      - N8N_PORT=5678
-      - WEBHOOK_URL=http://localhost:5678/
-      - GENERIC_TIMEZONE=Asia/Kolkata
-      - CONTENTOPS_SHEET_ID=${CONTENTOPS_SHEET_ID}
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
-    volumes:
-      - ./n8n-data:/home/node/.n8n
-    depends_on:
-      - ollama
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - agent/.env
+    restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
     ports:
       - "11434:11434"
     volumes:
-      - ./ollama-data:/root/.ollama
+      - ollama-data:/root/.ollama
+    profiles:
+      - ollama
+
+volumes:
+  ollama-data:

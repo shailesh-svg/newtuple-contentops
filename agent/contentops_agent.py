@@ -7,6 +7,7 @@ Ollama: local models for testing without API costs (set AI_PROVIDER=ollama).
 """
 
 import json
+import logging
 from typing import Any
 
 import anthropic
@@ -25,6 +26,8 @@ from tools.drive import list_drive_files, read_drive_doc
 from tools.repo_tools import list_repo_files, read_repo_file
 from tools.sheets import append_idea, read_tracker, write_tracker
 from tools.slack_client import post_to_slack, read_slack_thread
+
+log = logging.getLogger(__name__)
 
 # Tool definitions exposed to the model
 TOOLS = [
@@ -260,7 +263,7 @@ def run_agent_claude(user_prompt: str) -> str:
             for block in response.content:
                 if block.type == "tool_use":
                     result = _dispatch_tool(block.name, block.input)
-                    print(f"[tool] {block.name} → {json.dumps(result)[:200]}")
+                    log.info("tool %s → %s", block.name, json.dumps(result)[:200])
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -317,7 +320,7 @@ def run_agent_openai(user_prompt: str) -> str:
             for tc in msg.tool_calls:
                 inputs = json.loads(tc.function.arguments)
                 result = _dispatch_tool(tc.function.name, inputs)
-                print(f"[tool] {tc.function.name} → {json.dumps(result)[:200]}")
+                log.info("tool %s → %s", tc.function.name, json.dumps(result)[:200])
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -369,7 +372,7 @@ def run_agent_ollama(user_prompt: str) -> str:
             for tc in msg.tool_calls:
                 inputs = json.loads(tc.function.arguments)
                 result = _dispatch_tool(tc.function.name, inputs)
-                print(f"[tool/ollama] {tc.function.name} → {json.dumps(result)[:200]}")
+                log.info("tool %s → %s", tc.function.name, json.dumps(result)[:200])
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -386,7 +389,7 @@ def run(user_prompt: str) -> str:
     provider = (AI_PROVIDER or "openai").strip().lower()
 
     if provider == "ollama":
-        print(f"[provider] ollama ({OLLAMA_MODEL} @ {OLLAMA_BASE_URL})")
+        log.info("provider: ollama (%s @ %s)", OLLAMA_MODEL, OLLAMA_BASE_URL)
         return run_agent_ollama(user_prompt)
 
     if provider == "openai":
@@ -394,7 +397,7 @@ def run(user_prompt: str) -> str:
             return run_agent_openai(user_prompt)
         except Exception as primary_error:
             if ANTHROPIC_API_KEY:
-                print(f"[warn] OpenAI failed, falling back to Claude: {primary_error}")
+                log.warning("OpenAI failed, falling back to Claude: %s", primary_error)
                 try:
                     return run_agent_claude(user_prompt)
                 except Exception as fallback_error:
@@ -409,7 +412,7 @@ def run(user_prompt: str) -> str:
         return run_agent_claude(user_prompt)
     except Exception as primary_error:
         if OPENAI_API_KEY:
-            print(f"[warn] Claude failed, falling back to OpenAI: {primary_error}")
+            log.warning("Claude failed, falling back to OpenAI: %s", primary_error)
             try:
                 return run_agent_openai(user_prompt)
             except Exception as fallback_error:

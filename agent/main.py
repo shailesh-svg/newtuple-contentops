@@ -20,6 +20,7 @@ Slack bot usage (after `python main.py bot`):
 """
 
 import json
+import logging
 import os
 import re
 import sys
@@ -29,7 +30,10 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 from authz import AUTHZ
+from config import validate_startup
 from doctor import run_doctor
+
+log = logging.getLogger(__name__)
 from prompts import (
     build_draft_from_idea_prompt,
     build_repurpose_blog_prompt,
@@ -468,7 +472,8 @@ def start_slack_bot():
             meta["channel"], meta["message_ts"], "Rejected", reason, client, user_id, meta["idea_id"]
         )
 
-    print("ContentOps bot starting in Socket Mode...")
+    validate_startup()
+    log.info("ContentOps bot starting in Socket Mode")
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
     handler.start()
 
