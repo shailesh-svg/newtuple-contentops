@@ -252,6 +252,59 @@ def _run_tool(name: str, inputs: dict) -> Any:
 
 MAX_TOOL_ITERATIONS = 20  # prevent runaway loops on repeated tool failures
 
+# Transient provider errors worth retrying (rate limits, 5xx, timeouts, dropped
+# connections). With a single configured provider there is no failover, so
+# absorbing a quota/rate-limit *blip* here is what keeps a run alive. True quota
+# exhaustion (insufficient_quota) is NOT retried — it won't recover in seconds —
+# and is left to surface (or fall through to the other provider if configured).
+_PROVIDER_RETRY_EXC = (
+    openai.RateLimitError, openai.APITimeoutError,
+    openai.APIConnectionError, openai.InternalServerError,
+    anthropic.RateLimitError, anthropic.APITimeoutError,
+    anthropic.APIConnectionError, anthropic.InternalServerError,
+)
+_PROVIDER_MAX_ATTEMPTS = 4
+_PROVIDER_BACKOFF_BASE = 1.0  # seconds: 1, 2, 4
+_PROVIDER_BACKOFF_CAP = 30.0
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Honour a Retry-After header if the provider sent one."""
+    resp = getattr(exc, "response", None)
+    headers = getattr(resp, "headers", None) or {}
+    try:
+        val = headers.get("retry-after")
+        return float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _call_model(fn):
+    """Call a provider with bounded exponential backoff on transient errors."""
+    last_exc = None
+    for attempt in range(1, _PROVIDER_MAX_ATTEMPTS + 1):
+        try:
+            return fn()
+        except _PROVIDER_RETRY_EXC as e:
+            last_exc = e
+            # Quota exhaustion won't recover by retrying — fail fast.
+            if "insufficient_quota" in str(e).lower():
+                raise
+            if attempt >= _PROVIDER_MAX_ATTEMPTS:
+                break
+            wait = _retry_after_seconds(e)
+            if wait is None:
+                wait = _PROVIDER_BACKOFF_BASE * (2 ** (attempt - 1))
+            wait = min(wait, _PROVIDER_BACKOFF_CAP)
+            observability.record_event(
+                "provider_retry", name=type(e).__name__, ok=False,
+                detail={"attempt": attempt},
+            )
+            log.warning("provider call failed (attempt %d/%d): %s — retrying in %.1fs",
+                        attempt, _PROVIDER_MAX_ATTEMPTS, e, wait)
+            time.sleep(wait)
+    raise last_exc
+
 
 def run_agent_claude(user_prompt: str) -> str:
     """Agentic loop using Claude with tool_use."""
@@ -264,13 +317,13 @@ def run_agent_claude(user_prompt: str) -> str:
     messages = [{"role": "user", "content": user_prompt}]
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        response = client.messages.create(
+        response = _call_model(lambda: client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=8096,
             system=system,
             tools=TOOLS,
             messages=messages,
-        )
+        ))
 
         usage = getattr(response, "usage", None)
         if usage is not None:
@@ -332,11 +385,11 @@ def run_agent_openai(user_prompt: str) -> str:
     ]
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        response = client.chat.completions.create(
+        response = _call_model(lambda: client.chat.completions.create(
             model=OPENAI_MODEL,
             tools=openai_tools,
             messages=messages,
-        )
+        ))
 
         usage = getattr(response, "usage", None)
         if usage is not None:
@@ -390,11 +443,11 @@ def run_agent_ollama(user_prompt: str) -> str:
     ]
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        response = client.chat.completions.create(
+        response = _call_model(lambda: client.chat.completions.create(
             model=OLLAMA_MODEL,
             tools=openai_tools,
             messages=messages,
-        )
+        ))
 
         choice = response.choices[0]
         msg = choice.message

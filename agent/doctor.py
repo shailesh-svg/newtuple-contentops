@@ -113,6 +113,21 @@ def run_doctor() -> str:
     else:
         lines.append(_fail("OPENAI_API_KEY missing or placeholder"))
 
+    # Availability signal: with one provider there is no failover. A quota or
+    # rate-limit blip on it stalls every run (transient errors are retried with
+    # backoff, but sustained quota exhaustion needs a second provider).
+    if AI_PROVIDER != "ollama":
+        usable_providers = sum([bool(anthropic_ready), bool(openai_ready)])
+        if usable_providers >= 2:
+            lines.append(_ok("Provider failover available", "Claude + OpenAI both configured"))
+        else:
+            only = "OpenAI" if openai_ready else "Claude" if anthropic_ready else "none"
+            lines.append(_fail(
+                "No provider failover",
+                f"only {only} configured — a quota/rate limit will stall runs; "
+                "set the other provider's key for failover",
+            ))
+
     if service_account_mode:
         if google_file_ready:
             lines.append(_ok("GOOGLE_SERVICE_ACCOUNT_FILE found", GOOGLE_SERVICE_ACCOUNT_FILE))
