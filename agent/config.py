@@ -134,12 +134,27 @@ QUALITY_MIN_VOICE_SCORE = int(_env("QUALITY_MIN_VOICE_SCORE", "8") or "8")
 QUALITY_MIN_CHARS = int(_env("QUALITY_MIN_CHARS", "200") or "200")
 QUALITY_MAX_CHARS = int(_env("QUALITY_MAX_CHARS", "3000") or "3000")
 
-# Dashboard (read-only web view for non-technical members)
+# Dashboard (interactive web interface — watch / review / edit / approve per RBAC)
 DASHBOARD_PORT = int(_env("DASHBOARD_PORT", "8080") or "8080")
 DASHBOARD_HOST = _env("DASHBOARD_HOST", "0.0.0.0")
-# Optional shared-secret gate: if set, viewers must pass ?token=... (or an
-# Authorization: Bearer header). Leave empty for an open internal dashboard.
+# Legacy/dev shared secret: used as the password for the token-gated dev login.
 DASHBOARD_TOKEN = _env("DASHBOARD_TOKEN")
+# Flask session signing key. Leave blank for a random per-process key (sessions
+# drop on restart — fine for dev; set a stable value in production).
+DASHBOARD_SECRET_KEY = _env("DASHBOARD_SECRET_KEY")
+# Public base URL of the dashboard (used to build the OAuth redirect URI).
+# If blank, it is derived from the incoming request.
+DASHBOARD_BASE_URL = _env("DASHBOARD_BASE_URL")
+# Dev login (enter a Slack user id + DASHBOARD_TOKEN). Tri-state:
+#   "" (default) → ON only when Slack OAuth is NOT configured
+#   "true"/"false" → force on/off
+DASHBOARD_DEV_LOGIN = _env("DASHBOARD_DEV_LOGIN")
+
+# Sign in with Slack (OpenID Connect) — production identity for the dashboard.
+# Create a Slack app, enable OpenID Connect, add the redirect URL
+# <base>/auth/slack/callback, and set these.
+SLACK_CLIENT_ID = _env("SLACK_CLIENT_ID")
+SLACK_CLIENT_SECRET = _env("SLACK_CLIENT_SECRET")
 
 
 def validate_startup() -> None:

@@ -55,32 +55,43 @@ CloudWatch, …).
 
 ---
 
-## 3. Visual dashboard (for non-technical members)
+## 3. Interactive dashboard (watch / review / edit / approve, per RBAC)
 
-`agent/dashboard.py` is a single, self-refreshing web page (server-rendered
-HTML, no build step). It shows:
+`agent/dashboard.py` is a server-rendered web interface (no build step) and a
+`ReviewInterface` adapter: every write goes through the platform-neutral
+`review_service` — the same path the Slack bot uses — so RBAC and the audit trail
+are identical on both surfaces.
 
-- **Content pipeline funnel** — Idea → Draft → Needs Review → Approved →
-  Scheduled → Published, plus off-track (Needs Revision / Rejected), read live
-  from the Google Sheet tracker.
-- **By content bucket** — distribution across the 5 buckets.
-- **Agent health** — run success rate, avg + p95 run time, output tokens,
-  provider fallbacks.
-- **Quality-gate pass-rate** and the rules that block most often.
-- **Recent runs** and **recent review decisions**.
+Stakeholders sign in, and what they can do depends on their role (resolved via
+`identity.resolve` from the same `authz.yaml` used for Slack):
+
+- **viewer** — watch the pipeline funnel, buckets, gate pass-rate, runs, and open items.
+- **reviewer** — all of the above **+ Approve / Request revision / Reject**.
+- **editor** — watch + **edit** item fields (title, bucket, key message, draft).
+- **admin** — everything.
+
+### Sign-in (both built in)
+- **Sign in with Slack (OpenID Connect)** — production identity. Enabled when
+  `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` are set (+ redirect
+  `<DASHBOARD_BASE_URL>/auth/slack/callback`).
+- **Dev login** (Slack user id + `DASHBOARD_TOKEN`) — for local use before OAuth
+  is configured. Auto-disabled once OAuth is set, unless `DASHBOARD_DEV_LOGIN=true`.
+
+Sessions are signed with `DASHBOARD_SECRET_KEY` (set a stable value in prod);
+all state-changing POSTs are CSRF-protected.
 
 ```bash
-# Run locally
 python agent/main.py dashboard         # → http://localhost:8080
 
-# Endpoints
-GET /            # the dashboard
-GET /healthz     # liveness JSON (no token)
-GET /api/metrics # JSON for programmatic use
+# Routes
+GET  /                       # pipeline overview (login required)
+GET  /item/<content_id>      # item detail + review/edit (role-gated)
+POST /item/<id>/decide       # approve|revise|reject  → review_service.decide
+POST /item/<id>/edit         # field edits            → review_service.edit
+GET  /login, /logout, /auth/slack/start, /auth/slack/callback
+GET  /healthz                # liveness JSON (open, no auth)
+GET  /api/metrics            # JSON metrics (login required)
 ```
-
-Protect it with `DASHBOARD_TOKEN` (then open `http://host:8080/?token=…`). It is
-**read-only** — it never writes to the tracker or telemetry.
 
 ---
 
