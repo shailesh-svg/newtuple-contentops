@@ -8,9 +8,11 @@ Ollama: local models for testing without API costs (set AI_PROVIDER=ollama).
 
 import json
 import logging
+import time
 from typing import Any
 
 import anthropic
+import observability
 import openai
 from config import (
     AI_PROVIDER,
@@ -146,13 +148,19 @@ TOOLS = [
         "name": "post_to_slack",
         "description": (
             "Post a draft, plan, or analysis to the Slack review channel. "
-            "Returns thread_ts — save it to later read approval replies."
+            "Returns thread_ts — save it to later read approval replies. "
+            "IMPORTANT: when posting a DRAFT (idea_id set), you MUST also pass "
+            "bucket and voice_score — the draft runs through a deterministic "
+            "quality gate before posting. If it returns error=quality_gate_failed, "
+            "fix the listed violations and call this tool again."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "text": {"type": "string", "description": "Full message text (markdown supported)."},
-                "idea_id": {"type": "string", "description": "Idea ID this relates to (optional)."},
+                "idea_id": {"type": "string", "description": "Idea/Content ID this relates to. Set this for drafts needing approval."},
+                "bucket": {"type": "string", "description": "Content bucket for the draft (required for drafts)."},
+                "voice_score": {"type": "number", "description": "Your self-assessed voice alignment score 1-10 (required for drafts)."},
             },
             "required": ["text"],
         },
@@ -216,7 +224,7 @@ def _dispatch_tool(name: str, inputs: dict) -> Any:
             return list_repo_files(**_only(inputs, "directory"))
 
         if name == "post_to_slack":
-            return post_to_slack(**_only(inputs, "text", "idea_id"))
+            return post_to_slack(**_only(inputs, "text", "idea_id", "bucket", "voice_score"))
 
         if name == "read_slack_thread":
             return read_slack_thread(**_only(inputs, "thread_ts", "channel"))
@@ -228,6 +236,20 @@ def _dispatch_tool(name: str, inputs: dict) -> Any:
         return {"error": f"Tool '{name}' failed: {e}. Check inputs and retry."}
 
 
+def _run_tool(name: str, inputs: dict) -> Any:
+    """Dispatch a tool call with timing + telemetry recording."""
+    start = time.perf_counter()
+    result = _dispatch_tool(name, inputs)
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    ok = not (isinstance(result, dict) and "error" in result)
+    observability.record_event(
+        "tool_call", name=name, ok=ok, duration_ms=duration_ms,
+        detail={"error": result.get("error")} if not ok and isinstance(result, dict) else None,
+    )
+    log.info("tool %s (%dms) → %s", name, duration_ms, json.dumps(result, default=str)[:200])
+    return result
+
+
 MAX_TOOL_ITERATIONS = 20  # prevent runaway loops on repeated tool failures
 
 
@@ -237,6 +259,7 @@ def run_agent_claude(user_prompt: str) -> str:
         raise RuntimeError("ANTHROPIC_API_KEY is missing")
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    observability.set_provider("claude", CLAUDE_MODEL)
     system = build_system_prompt()
     messages = [{"role": "user", "content": user_prompt}]
 
@@ -248,6 +271,12 @@ def run_agent_claude(user_prompt: str) -> str:
             tools=TOOLS,
             messages=messages,
         )
+
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            observability.add_tokens(
+                getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0)
+            )
 
         # Collect any text output for logging
         text_output = ""
@@ -262,8 +291,7 @@ def run_agent_claude(user_prompt: str) -> str:
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result = _dispatch_tool(block.name, block.input)
-                    log.info("tool %s → %s", block.name, json.dumps(result)[:200])
+                    result = _run_tool(block.name, block.input)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -285,6 +313,7 @@ def run_agent_openai(user_prompt: str) -> str:
         raise RuntimeError("OPENAI_API_KEY is missing")
 
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    observability.set_provider("openai", OPENAI_MODEL)
     system = build_system_prompt()
 
     # Convert Anthropic tool format to OpenAI function format
@@ -309,6 +338,12 @@ def run_agent_openai(user_prompt: str) -> str:
             messages=messages,
         )
 
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            observability.add_tokens(
+                getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0)
+            )
+
         choice = response.choices[0]
         msg = choice.message
         messages.append(msg)
@@ -319,12 +354,11 @@ def run_agent_openai(user_prompt: str) -> str:
         if choice.finish_reason == "tool_calls":
             for tc in msg.tool_calls:
                 inputs = json.loads(tc.function.arguments)
-                result = _dispatch_tool(tc.function.name, inputs)
-                log.info("tool %s → %s", tc.function.name, json.dumps(result)[:200])
+                result = _run_tool(tc.function.name, inputs)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": json.dumps(result),
+                    "content": json.dumps(result, default=str),
                 })
         else:
             return msg.content or f"[stopped: {choice.finish_reason}]"
@@ -338,6 +372,7 @@ def run_agent_ollama(user_prompt: str) -> str:
         base_url=OLLAMA_BASE_URL,
         api_key="ollama",  # required by SDK but unused by Ollama
     )
+    observability.set_provider("ollama", OLLAMA_MODEL)
     system = build_system_prompt()
 
     openai_tools = [
@@ -371,12 +406,11 @@ def run_agent_ollama(user_prompt: str) -> str:
         if choice.finish_reason == "tool_calls":
             for tc in msg.tool_calls:
                 inputs = json.loads(tc.function.arguments)
-                result = _dispatch_tool(tc.function.name, inputs)
-                log.info("tool %s → %s", tc.function.name, json.dumps(result)[:200])
+                result = _run_tool(tc.function.name, inputs)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": json.dumps(result),
+                    "content": json.dumps(result, default=str),
                 })
         else:
             return msg.content or f"[stopped: {choice.finish_reason}]"
@@ -398,6 +432,10 @@ def run(user_prompt: str) -> str:
         except Exception as primary_error:
             if ANTHROPIC_API_KEY:
                 log.warning("OpenAI failed, falling back to Claude: %s", primary_error)
+                observability.record_event(
+                    "provider_fallback", name="openai->claude", ok=False,
+                    detail={"error": str(primary_error)[:500]},
+                )
                 try:
                     return run_agent_claude(user_prompt)
                 except Exception as fallback_error:
@@ -413,6 +451,10 @@ def run(user_prompt: str) -> str:
     except Exception as primary_error:
         if OPENAI_API_KEY:
             log.warning("Claude failed, falling back to OpenAI: %s", primary_error)
+            observability.record_event(
+                "provider_fallback", name="claude->openai", ok=False,
+                detail={"error": str(primary_error)[:500]},
+            )
             try:
                 return run_agent_openai(user_prompt)
             except Exception as fallback_error:

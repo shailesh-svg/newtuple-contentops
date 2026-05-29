@@ -31,3 +31,9 @@ venv/
 *.log
 logs/
 tmp/
+
+# Observability / telemetry store (SQLite + WAL sidecars)
+agent/data/
+*.db
+*.db-wal
+*.db-shm

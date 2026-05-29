@@ -35,7 +35,23 @@ primary_region = "sin"
   SLACK_REVIEW_CHANNEL  = "#contentops-review"
   AUTHZ_STRICT       = "true"
   AUTHZ_DEFAULT_ROLE = "viewer"
+  # Telemetry persists on the mounted volume below so run history + the
+  # dashboard survive deploys. JSON logs for Fly's log shipper.
+  CONTENTOPS_DB      = "/data/ops.db"
+  LOG_FORMAT         = "json"
+
+# Persistent volume for the SQLite telemetry store.
+# Create it once:  fly volumes create contentops_data --size 1 --region sin
+[mounts]
+  source      = "contentops_data"
+  destination = "/data"
 
 [[vm]]
   size   = "shared-cpu-1x"
   memory = "256mb"
+
+# ── Optional: the read-only dashboard ────────────────────────────────────────
+# The dashboard needs the SAME telemetry DB the bot writes. The simplest correct
+# setup is to run it locally / via docker-compose against a shared volume, or as
+# a separate Fly app. Running it as a second process here would land on a
+# separate machine with a separate volume, so it would not see the bot's data.

@@ -24,21 +24,68 @@ import logging
 import os
 import re
 import sys
+import threading
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 # Allow imports from agent/ directory
 sys.path.insert(0, os.path.dirname(__file__))
 
+import observability
 from authz import AUTHZ
 from config import validate_startup
 from doctor import run_doctor
-
-log = logging.getLogger(__name__)
 from prompts import (
     build_draft_from_idea_prompt,
     build_repurpose_blog_prompt,
     build_weekly_plan_prompt,
 )
+
+log = logging.getLogger(__name__)
+
+# Commands that invoke the LLM / mutate state and are worth recording as a run.
+_TRACKED_COMMANDS = {"draft-from-idea", "plan-week", "repurpose-blog", "update-status"}
+
+# ─── Slack event de-duplication ──────────────────────────────────────────────
+# Slack redelivers events that aren't acknowledged in time. The agentic loop can
+# run for 30-60s, so without dedup the same mention would be drafted 2-3 times
+# (and the tracker written multiple times). We remember recently-seen event IDs.
+_SEEN_EVENTS: "OrderedDict[str, bool]" = OrderedDict()
+_SEEN_LOCK = threading.Lock()
+_SEEN_MAX = 2000
+
+
+def _is_duplicate_event(event_id: str) -> bool:
+    """Return True if this Slack event_id was already processed."""
+    if not event_id:
+        return False
+    with _SEEN_LOCK:
+        if event_id in _SEEN_EVENTS:
+            return True
+        _SEEN_EVENTS[event_id] = True
+        while len(_SEEN_EVENTS) > _SEEN_MAX:
+            _SEEN_EVENTS.popitem(last=False)
+        return False
+
+
+def _is_contentops_draft(message: dict, bot_id: str = "") -> bool:
+    """Verify a thread-root message is a ContentOps draft this bot posted.
+
+    Guards the free-text approval path: without this, replying "approve" in any
+    thread the bot can see would scrape an ID-shaped token from the root message
+    and write it to the tracker. A real draft is posted by this bot and carries
+    an ``approval_<id>`` actions block (or the ContentOps header/fallback text).
+    """
+    if bot_id and message.get("bot_id") and message.get("bot_id") != bot_id:
+        return False
+    for block in message.get("blocks", []) or []:
+        if str(block.get("block_id", "")).startswith("approval_"):
+            return True
+    # Fallback for older drafts: our bot + recognisable fallback text.
+    if message.get("bot_id") and "ContentOps Draft" in message.get("text", ""):
+        return True
+    return False
+
 
 # ─── Command handlers ────────────────────────────────────────────────────────
 
@@ -78,6 +125,7 @@ def cmd_help() -> str:
         "• `@contentops whoami` — show your Slack user ID for role mapping\n"
         "• `@contentops help` — show this message\n\n"
         "CLI only: `python main.py doctor` — run credential and connectivity checks\n\n"
+        "CLI only: `python main.py dashboard` — start the read-only web dashboard\n\n"
         "CLI only: `python main.py google-email` — show service account email\n\n"
         "Status values: `new` | `needs_review` | `Approved` | `Needs Revision` | `Rejected` | `published`"
     )
@@ -117,8 +165,8 @@ def _extract_content_id(text: str) -> str:
     return ""
 
 
-def _parse_and_run(command: str, args: list) -> str:
-    """Parse a command string and dispatch to the right handler."""
+def _dispatch_command(command: str, args: list) -> str:
+    """Route a parsed command to its handler (no telemetry concerns here)."""
     if command == "draft-from-idea":
         if not args:
             return "Usage: draft-from-idea <idea text>"
@@ -150,6 +198,24 @@ def _parse_and_run(command: str, args: list) -> str:
     from contentops_agent import run
     full_message = (command + " " + " ".join(args)).strip()
     return run(full_message)
+
+
+def _parse_and_run(command: str, args: list, user_id: str = "cli") -> str:
+    """Parse a command and dispatch it, recording a run for tracked commands."""
+    is_tracked = command in _TRACKED_COMMANDS or command not in {
+        "help", "doctor", "google-email", "whoami"
+    }
+    if not is_tracked:
+        return _dispatch_command(command, args)
+
+    with observability.start_run(command=command, user_id=user_id) as run:
+        result = _dispatch_command(command, args)
+        if isinstance(result, str) and result.startswith("Error:"):
+            run.finish(status="error", error=result)
+        else:
+            run.record_event("result", name=command, ok=True,
+                              detail={"preview": (result or "")[:200]})
+        return result
 
 
 def _safe_error_message(command: str, error: Exception) -> str:
@@ -199,9 +265,17 @@ def start_slack_bot():
 
     app = App(token=SLACK_BOT_TOKEN)
 
+    # Bot identity — resolved at startup, used to dedup the bot's own messages
+    # and to verify approval threads. Populated just before the bot starts.
+    bot_identity: dict = {}
+
     @app.event("app_mention")
-    def handle_mention(event, say, client):
+    def handle_mention(event, body, say, client):
         """Handle @contentops <command> mentions."""
+        if _is_duplicate_event(body.get("event_id", "")):
+            log.info("ignoring duplicate app_mention event %s", body.get("event_id"))
+            return
+
         text = event.get("text", "")
         thread_ts = event.get("thread_ts") or event.get("ts")
         channel = event["channel"]
@@ -238,29 +312,37 @@ def start_slack_bot():
         label = command if is_known else "your request"
         say(text=f"On it — running `{label}`...", thread_ts=thread_ts)
 
-        try:
-            result = _parse_and_run(command, args)
-        except Exception as e:
-            result = _safe_error_message(command, e)
+        # Run the (potentially slow) agent off the event thread so the Socket
+        # Mode listener returns quickly and Slack doesn't redeliver the event.
+        def _work():
+            try:
+                result = _parse_and_run(command, args, user_id=user_id)
+            except Exception as e:
+                result = _safe_error_message(command, e)
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=result,
+                mrkdwn=True,
+            )
 
-        # Post result back in thread
-        client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=result,
-            mrkdwn=True,
-        )
+        threading.Thread(target=_work, daemon=True, name=f"contentops-{command}").start()
 
     @app.event("message")
-    def handle_approval_reply(event, client):
+    def handle_approval_reply(event, body, client):
         """
         Handle approve/revise/reject replies in review threads.
         The agent posts drafts with a thread_ts; reviewers reply in that thread.
         """
-        if event.get("subtype") == "bot_message":
+        # Ignore any bot-authored message (including this bot's own posts).
+        # Checking bot_id is more reliable than the bot_message subtype.
+        if event.get("subtype") == "bot_message" or event.get("bot_id"):
+            return
+        if _is_duplicate_event(body.get("event_id", "")):
             return
 
-        text = event.get("text", "").strip().lower()
+        raw = event.get("text", "").strip()
+        text = raw.lower()
         thread_ts = event.get("thread_ts")
         channel = event.get("channel")
         user_id = event.get("user", "")
@@ -268,8 +350,30 @@ def start_slack_bot():
         if not thread_ts:
             return  # not a thread reply
 
+        # Match a leading decision keyword exactly (avoid "approve the budget").
+        decision = None
+        if re.match(r"^approved?\b", text):
+            decision = "approve"
+        elif text.startswith("revise:"):
+            decision = "revise"
+        elif text.startswith("reject:"):
+            decision = "reject"
+        if decision is None:
+            return
+
+        # Only act if the thread root is a ContentOps draft this bot posted.
+        try:
+            history = client.conversations_replies(channel=channel, ts=thread_ts, limit=1)
+            root = history["messages"][0] if history.get("messages") else {}
+        except Exception as e:
+            log.warning("approval: could not read thread root: %s", e)
+            return
+        if not _is_contentops_draft(root, bot_identity.get("bot_id", "")):
+            log.info("approval ignored — thread root is not a ContentOps draft")
+            return
+
         # Only act on clear approval keywords
-        if text.startswith("approve"):
+        if decision == "approve":
             if not AUTHZ.can_review(user_id, "approve"):
                 client.chat_postMessage(
                     channel=channel,
@@ -279,7 +383,7 @@ def start_slack_bot():
                 )
                 return
             _handle_approval(channel, thread_ts, "Approved", "", client, user_id)
-        elif text.startswith("revise:"):
+        elif decision == "revise":
             if not AUTHZ.can_review(user_id, "revise"):
                 client.chat_postMessage(
                     channel=channel,
@@ -288,9 +392,9 @@ def start_slack_bot():
                     mrkdwn=True,
                 )
                 return
-            notes = event.get("text", "")[7:].strip()
+            notes = raw[7:].strip()
             _handle_approval(channel, thread_ts, "Needs Revision", notes, client, user_id)
-        elif text.startswith("reject:"):
+        elif decision == "reject":
             if not AUTHZ.can_review(user_id, "reject"):
                 client.chat_postMessage(
                     channel=channel,
@@ -299,13 +403,11 @@ def start_slack_bot():
                     mrkdwn=True,
                 )
                 return
-            reason = event.get("text", "")[7:].strip()
+            reason = raw[7:].strip()
             _handle_approval(channel, thread_ts, "Rejected", reason, client, user_id)
 
     def _handle_approval(channel, thread_ts, status, notes, client, reviewer_user_id):
         """Update the tracker and confirm in thread when a reviewer uses text reply."""
-        from tools.sheets import write_tracker
-
         try:
             history = client.conversations_replies(channel=channel, ts=thread_ts)
             original_text = history["messages"][0].get("text", "")
@@ -343,6 +445,7 @@ def start_slack_bot():
                 reply = f"{status_icon} `{idea_id}` → *{status}*"
                 if notes:
                     reply += f"\n> {notes}"
+                observability.record_approval(idea_id, status, reviewer_user_id, source="slack")
                 # Replace action buttons with a status badge on the original message
                 update_draft_message_status(channel, message_ts, status, reviewer_user_id)
         else:
@@ -473,6 +576,18 @@ def start_slack_bot():
         )
 
     validate_startup()
+    observability.init_db()
+
+    # Resolve this bot's identity so we can recognise its own posts and verify
+    # that approval replies belong to real ContentOps draft threads.
+    try:
+        auth = app.client.auth_test()
+        bot_identity["user_id"] = auth.get("user_id", "")
+        bot_identity["bot_id"] = auth.get("bot_id", "")
+        log.info("ContentOps bot identity: user=%s", bot_identity.get("user_id"))
+    except Exception as e:
+        log.warning("could not resolve bot identity via auth_test: %s", e)
+
     log.info("ContentOps bot starting in Socket Mode")
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
     handler.start()
@@ -491,6 +606,11 @@ def main():
 
     if command == "bot":
         start_slack_bot()
+        return
+
+    if command == "dashboard":
+        from dashboard import start_dashboard
+        start_dashboard()
         return
 
     result = _parse_and_run(command, args[1:])

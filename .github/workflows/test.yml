@@ -46,6 +46,27 @@ jobs:
       - name: Run tests
         run: pytest --cov=agent --cov-report=term-missing
 
+      - name: Content quality-gate self-test
+        # Guards the guardrail: prove the gate still blocks a known-bad draft and
+        # passes a known-good one. A regression that silently weakens the gate
+        # fails the build here, independently of the unit tests.
+        working-directory: agent
+        run: |
+          python - <<'PY'
+          from quality_gate import evaluate_draft
+          good = (
+              "Treating a demo as production is the mistake. Reliability, "
+              "monitoring, and clear workflow ownership decide whether an "
+              "enterprise rollout survives real users. Start this week: audit "
+              "one workflow and define who owns each handoff before you ship."
+          )
+          bad = good + " This is a total game changer."
+          assert evaluate_draft(good, bucket="Workflow Wins", voice_score=9)["passed"], "good draft should pass"
+          assert not evaluate_draft(bad, bucket="Workflow Wins", voice_score=9)["passed"], "banned phrase must block"
+          assert not evaluate_draft(good, bucket="", voice_score=9)["passed"], "missing bucket must block"
+          print("quality gate self-test OK")
+          PY
+
       - name: Secret scan
         uses: gitleaks/gitleaks-action@v2
         env:

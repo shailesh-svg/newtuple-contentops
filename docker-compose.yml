@@ -1,16 +1,47 @@
-# Local development compose file.
+# Local / self-hosted deployment.
 # Copy agent/.env.example → agent/.env and fill in credentials before running.
 #
-#   docker compose up                  # agent only (uses OpenAI / Claude API)
-#   docker compose --profile ollama up # agent + local Ollama
+#   docker compose up --build               # Slack bot + dashboard
+#   docker compose --profile ollama up      # also start local Ollama
+#   open http://localhost:8080              # dashboard for non-technical members
+#
+# The bot and the dashboard share one telemetry volume so the dashboard sees
+# every run, quality-gate verdict, and review decision the bot records.
 
 services:
   agent:
     build:
       context: .
       dockerfile: Dockerfile
+    image: newtuple-contentops-agent
     env_file:
       - agent/.env
+    environment:
+      CONTENTOPS_DB: /data/ops.db
+    volumes:
+      - contentops-data:/data
+    command: ["python", "main.py", "bot"]
+    restart: unless-stopped
+
+  dashboard:
+    image: newtuple-contentops-agent
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - agent/.env
+    environment:
+      CONTENTOPS_DB: /data/ops.db
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: "8080"
+      # Set DASHBOARD_TOKEN in agent/.env to require ?token=... on the URL.
+    volumes:
+      - contentops-data:/data
+    command: ["python", "main.py", "dashboard"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      - agent
     restart: unless-stopped
 
   ollama:
@@ -23,4 +54,5 @@ services:
       - ollama
 
 volumes:
+  contentops-data:
   ollama-data:

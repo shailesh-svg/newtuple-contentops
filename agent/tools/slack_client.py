@@ -1,11 +1,16 @@
+import logging
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import SLACK_BOT_TOKEN, SLACK_REVIEW_CHANNEL
+import observability
+from config import QUALITY_GATE_ENABLED, SLACK_BOT_TOKEN, SLACK_REVIEW_CHANNEL
+from quality_gate import evaluate_draft, format_violations
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+
+log = logging.getLogger(__name__)
 
 _SECTION_LIMIT = 3000  # Slack Block Kit max chars per section text
 
@@ -111,12 +116,50 @@ def _build_plan_blocks(text: str) -> list:
     return blocks
 
 
-def post_to_slack(text: str, idea_id: str = "") -> dict:
+def post_to_slack(
+    text: str,
+    idea_id: str = "",
+    bucket: str = "",
+    voice_score: float = None,
+) -> dict:
     """Post a draft or plan to the Slack review channel. Returns thread_ts.
 
-    If idea_id is provided the message includes approve / revise / reject buttons.
-    Otherwise it renders as a formatted plan with sections.
+    If idea_id is provided the message is treated as a draft requiring approval:
+    it must first clear the deterministic quality gate, and it renders with
+    approve / revise / reject buttons. A blocked draft is NOT posted — the
+    violations are returned so the agent can revise and retry. Messages without
+    an idea_id (plans, analyses) render as formatted sections and skip the gate.
     """
+    # ── Quality gate: drafts must pass before reaching a human reviewer ──
+    if idea_id and QUALITY_GATE_ENABLED:
+        result = evaluate_draft(text, bucket=bucket, voice_score=voice_score)
+        observability.record_event(
+            "gate",
+            name=idea_id,
+            ok=result["passed"],
+            detail={
+                "violations": result["violations"],
+                "warnings": result["warnings"],
+                "bucket": bucket,
+                "voice_score": voice_score,
+            },
+        )
+        if not result["passed"]:
+            log.warning("quality gate BLOCKED %s: %s", idea_id,
+                        [v["rule"] for v in result["violations"]])
+            return {
+                "error": "quality_gate_failed",
+                "blocked": True,
+                "idea_id": idea_id,
+                "violations": result["violations"],
+                "warnings": result["warnings"],
+                "message": (
+                    "Draft was blocked by the quality gate and was NOT posted. "
+                    "Fix these issues and call post_to_slack again:\n"
+                    + format_violations(result)
+                ),
+            }
+
     try:
         client = _client()
         blocks = _build_draft_blocks(text, idea_id) if idea_id else _build_plan_blocks(text)

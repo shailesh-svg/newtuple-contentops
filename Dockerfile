@@ -15,14 +15,23 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY agent/ /app/
 
+# Default telemetry location; override with a mounted volume in prod
+# (e.g. CONTENTOPS_DB=/data/ops.db on Fly.io).
+ENV CONTENTOPS_DB=/app/data/ops.db
+
 RUN useradd --create-home --uid 10001 contentops \
+    && mkdir -p /app/data \
     && chown -R contentops:contentops /app /opt/venv
 
 USER contentops
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD python -c "import main, config, tools.sheets" || exit 1
+EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD python -c "import main, config, tools.sheets, observability, quality_gate" || exit 1
+
+# Default process is the Slack bot. Override to run the dashboard:
+#   docker run ... python main.py dashboard
 CMD ["python", "main.py", "bot"]
 
 LABEL org.opencontainers.image.title="Newtuple ContentOps Agent" \

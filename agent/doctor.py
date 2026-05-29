@@ -304,4 +304,41 @@ def run_doctor() -> str:
         except Exception as e:
             lines.append(_fail("Google Drive list failed", _redact_error(e)))
 
+    # Telemetry store — must be writable for the dashboard + run tracking.
+    try:
+        import observability
+        from config import CONTENTOPS_DB
+
+        observability.init_db()
+        observability.ops_metrics(window_hours=1)
+        lines.append(_ok("Telemetry store writable", CONTENTOPS_DB))
+    except Exception as e:
+        lines.append(_fail("Telemetry store check failed", _redact_error(e)))
+
+    # Quality gate — verify brand rules load (guards the guardrail).
+    try:
+        from quality_gate import load_banned_phrases, load_valid_buckets
+
+        phrases = load_banned_phrases()
+        buckets = load_valid_buckets()
+        if phrases and buckets:
+            lines.append(_ok("Quality gate ready", f"{len(phrases)} banned phrases, {len(buckets)} buckets"))
+        else:
+            lines.append(_fail("Quality gate rules empty", "check contentops/brand/ markdown"))
+    except Exception as e:
+        lines.append(_fail("Quality gate check failed", _redact_error(e)))
+
+    # Tracker schema contract + active storage backend.
+    try:
+        import schema
+        from tools.tracker_backends import resolve_backend_name
+
+        lines.append(_ok(
+            "Tracker schema loaded",
+            f"v{schema.schema_version()}, {len(schema.column_names())} columns, "
+            f"backend={resolve_backend_name()}",
+        ))
+    except Exception as e:
+        lines.append(_fail("Tracker schema check failed", _redact_error(e)))
+
     return "\n".join(lines)

@@ -1,12 +1,35 @@
+import json
 import logging
 import os
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+
+class _JsonLogFormatter(logging.Formatter):
+    """Structured one-line-JSON logs for ingestion by log platforms."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload)
+
+
+_LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+if os.environ.get("LOG_FORMAT", "text").lower() == "json":
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(_JsonLogFormatter())
+    logging.basicConfig(level=_LOG_LEVEL, handlers=[_handler])
+else:
+    logging.basicConfig(
+        level=_LOG_LEVEL,
+        format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
 try:
     from dotenv import load_dotenv
@@ -54,6 +77,14 @@ OPENAI_MODEL = _env("OPENAI_MODEL", "gpt-4o")
 OLLAMA_BASE_URL = _env("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = _env("OLLAMA_MODEL", "llama3.1")
 
+# Tracker backend selection (plug-and-play storage).
+#   sheets      — Google Sheets via service account
+#   apps_script — Google Apps Script web-app bridge
+#   jsonfile    — local JSON file (no credentials; for dev/test/demos)
+# Left blank, it is derived from GOOGLE_AUTH_MODE for backward compatibility.
+TRACKER_BACKEND = _env("TRACKER_BACKEND").lower()
+TRACKER_JSON_FILE = _env("TRACKER_JSON_FILE", str(Path(__file__).parent / "data" / "tracker.json"))
+
 # Google
 GOOGLE_AUTH_MODE = _env("GOOGLE_AUTH_MODE", "service_account").lower()
 GOOGLE_SERVICE_ACCOUNT_FILE = _env("GOOGLE_SERVICE_ACCOUNT_FILE")
@@ -84,6 +115,24 @@ AUTHZ_ADMIN_USERS = [
     if u.strip()
 ]
 
+# Observability / tracking
+# SQLite store for run + event telemetry. On Fly.io point this at a mounted
+# volume (e.g. /data/ops.db) so history survives deploys.
+CONTENTOPS_DB = _env("CONTENTOPS_DB", str(Path(__file__).parent / "data" / "ops.db"))
+
+# Quality gate — drafts that fail hard checks are blocked before reaching Slack.
+QUALITY_GATE_ENABLED = _env("QUALITY_GATE_ENABLED", "true").lower() in {"1", "true", "yes"}
+QUALITY_MIN_VOICE_SCORE = int(_env("QUALITY_MIN_VOICE_SCORE", "8") or "8")
+QUALITY_MIN_CHARS = int(_env("QUALITY_MIN_CHARS", "200") or "200")
+QUALITY_MAX_CHARS = int(_env("QUALITY_MAX_CHARS", "3000") or "3000")
+
+# Dashboard (read-only web view for non-technical members)
+DASHBOARD_PORT = int(_env("DASHBOARD_PORT", "8080") or "8080")
+DASHBOARD_HOST = _env("DASHBOARD_HOST", "0.0.0.0")
+# Optional shared-secret gate: if set, viewers must pass ?token=... (or an
+# Authorization: Bearer header). Leave empty for an open internal dashboard.
+DASHBOARD_TOKEN = _env("DASHBOARD_TOKEN")
+
 
 def validate_startup() -> None:
     """Fail fast with a clear message if required credentials are missing.
@@ -107,16 +156,25 @@ def validate_startup() -> None:
         errors.append("SLACK_BOT_TOKEN is required")
     if not SLACK_APP_TOKEN:
         errors.append("SLACK_APP_TOKEN is required for Socket Mode")
-    if GOOGLE_AUTH_MODE == "apps_script":
+    # Tracker backend: explicit TRACKER_BACKEND wins, else derive from the legacy
+    # GOOGLE_AUTH_MODE. The jsonfile backend needs no Google credentials.
+    backend = TRACKER_BACKEND or ("apps_script" if GOOGLE_AUTH_MODE == "apps_script" else "sheets")
+    if backend == "apps_script":
         if not GOOGLE_APPS_SCRIPT_URL:
-            errors.append("GOOGLE_APPS_SCRIPT_URL is required when GOOGLE_AUTH_MODE=apps_script")
+            errors.append("GOOGLE_APPS_SCRIPT_URL is required for the apps_script backend")
         if not GOOGLE_APPS_SCRIPT_TOKEN:
-            errors.append("GOOGLE_APPS_SCRIPT_TOKEN is required when GOOGLE_AUTH_MODE=apps_script")
-    elif GOOGLE_AUTH_MODE == "service_account":
+            errors.append("GOOGLE_APPS_SCRIPT_TOKEN is required for the apps_script backend")
+        if not CONTENTOPS_SHEET_ID:
+            errors.append("CONTENTOPS_SHEET_ID is required")
+    elif backend in {"sheets", "service_account"}:
         if not GOOGLE_SERVICE_ACCOUNT_FILE:
-            errors.append("GOOGLE_SERVICE_ACCOUNT_FILE is required when GOOGLE_AUTH_MODE=service_account")
-    if not CONTENTOPS_SHEET_ID:
-        errors.append("CONTENTOPS_SHEET_ID is required")
+            errors.append("GOOGLE_SERVICE_ACCOUNT_FILE is required for the sheets backend")
+        if not CONTENTOPS_SHEET_ID:
+            errors.append("CONTENTOPS_SHEET_ID is required")
+    elif backend == "jsonfile":
+        pass  # no external credentials required
+    else:
+        errors.append(f"Unknown TRACKER_BACKEND {backend!r} (sheets | apps_script | jsonfile)")
 
     if errors:
         for err in errors:
