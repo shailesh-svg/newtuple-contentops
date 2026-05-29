@@ -85,6 +85,14 @@ OLLAMA_MODEL = _env("OLLAMA_MODEL", "llama3.1")
 TRACKER_BACKEND = _env("TRACKER_BACKEND").lower()
 TRACKER_JSON_FILE = _env("TRACKER_JSON_FILE", str(Path(__file__).parent / "data" / "tracker.json"))
 
+# Knowledge-source backend (where the agent reads source material from).
+#   gdrive      — Google Drive via service account
+#   apps_script — Google Apps Script bridge
+#   localfs     — a local directory (no credentials; dev/test/demos)
+# Blank → derived from GOOGLE_AUTH_MODE for backward compatibility.
+SOURCE_BACKEND = _env("SOURCE_BACKEND").lower()
+SOURCE_LOCAL_DIR = _env("SOURCE_LOCAL_DIR", str(Path(__file__).parent / "data" / "sources"))
+
 # Google
 GOOGLE_AUTH_MODE = _env("GOOGLE_AUTH_MODE", "service_account").lower()
 GOOGLE_SERVICE_ACCOUNT_FILE = _env("GOOGLE_SERVICE_ACCOUNT_FILE")

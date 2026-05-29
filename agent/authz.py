@@ -20,6 +20,7 @@ DEFAULT_ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         "draft-from-idea",
         "plan-week",
         "repurpose-blog",
+        "edit",
         "help",
         "whoami",
     },
@@ -46,6 +47,10 @@ class AuthZ:
             r: set(p) for r, p in DEFAULT_ROLE_PERMISSIONS.items()
         }
         self.user_roles: Dict[str, str] = {}
+        # Platform-qualified identity → canonical principal id, e.g.
+        # {"slack:U123": "alice", "web:alice@co": "alice"}. Empty means the raw
+        # platform user id IS the principal id (back-compatible).
+        self.identities: Dict[str, str] = {}
         self.load_config()
 
     def load_config(self) -> None:
@@ -78,6 +83,11 @@ class AuthZ:
                 if role in self.role_permissions:
                     self.user_roles[str(user_id).strip()] = str(role)
 
+        identities = cfg.get("identities", {})
+        if isinstance(identities, dict):
+            for handle, principal_id in identities.items():
+                self.identities[str(handle).strip()] = str(principal_id).strip()
+
         default_role = cfg.get("default_role")
         if isinstance(default_role, str) and default_role in self.role_permissions:
             self.default_role = default_role
@@ -94,12 +104,42 @@ class AuthZ:
             self.load_error = str(e)
             return {}
 
-    def role_for_user(self, user_id: str) -> str:
-        return self.user_roles.get(user_id, self.default_role)
+    def resolve_id(self, platform: str, platform_user_id: str) -> str:
+        """Map a platform-specific user id to its canonical principal id.
 
-    def permissions_for_user(self, user_id: str) -> Set[str]:
-        role = self.role_for_user(user_id)
+        Falls back to the raw id when no mapping exists, so existing configs
+        that key roles directly by Slack user id keep working.
+        """
+        handle = f"{platform}:{platform_user_id}"
+        return (
+            self.identities.get(handle)
+            or self.identities.get(platform_user_id)
+            or platform_user_id
+        )
+
+    def role_for_user(self, user_id: str, platform: str = "slack") -> str:
+        principal_id = self.resolve_id(platform, user_id)
+        return self.user_roles.get(principal_id, self.default_role)
+
+    def permissions_for_user(self, user_id: str, platform: str = "slack") -> Set[str]:
+        role = self.role_for_user(user_id, platform)
         return self.role_permissions.get(role, set())
+
+    def resolve_principal(self, platform: str, platform_user_id: str, display_name: str = ""):
+        """Build a platform-neutral Principal for an actor on any interface."""
+        from identity import Principal
+
+        principal_id = self.resolve_id(platform, platform_user_id)
+        role = self.user_roles.get(principal_id, self.default_role)
+        perms = self.role_permissions.get(role, set())
+        return Principal(
+            id=principal_id,
+            display_name=display_name or principal_id,
+            platform=platform,
+            role=role,
+            permissions=frozenset(perms),
+            strict=self.strict,
+        )
 
     def can_run_command(self, user_id: str, command: str) -> bool:
         if not self.strict:

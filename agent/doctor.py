@@ -356,4 +356,12 @@ def run_doctor() -> str:
     except Exception as e:
         lines.append(_fail("Tracker schema check failed", _redact_error(e)))
 
+    # Active adapters (the platform-agnostic edges).
+    try:
+        from tools.source_backends import resolve_source_name
+
+        lines.append(_ok("Knowledge source backend", resolve_source_name()))
+    except Exception as e:
+        lines.append(_fail("Source backend check failed", _redact_error(e)))
+
     return "\n".join(lines)

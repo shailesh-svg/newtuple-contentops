@@ -26,13 +26,21 @@ agent/               the Python agent — run this to operate the system
   observability.py   SQLite run/event telemetry store + metrics
   dashboard.py       read-only Flask dashboard for non-technical members
   schema.py          loads the canonical tracker contract (single source of truth)
+  identity.py        platform-neutral Principal + resolve(platform, user_id)
+  review_service.py  platform-neutral approve/revise/reject/edit (RBAC + audit)
   tools/
     sheets.py        tracker facade — applies schema, delegates to a backend
     tracker_backends.py  pluggable storage: Sheets / Apps Script / JSON file
+    drive.py         knowledge-source facade
+    source_backends.py   pluggable sources: Google Drive / Apps Script / local FS
 contentops/schema/tracker.schema.json   the tracker contract (fields, aliases, statuses)
 ```
 
-See `ARCHITECTURE.md` for the schema contract + how to plug in a new storage backend.
+ContentOps is a platform-agnostic engine + swappable adapters on every edge
+(LLM, tracker, source, interface, identity). See `PLATFORM.md` for the full
+model and `ARCHITECTURE.md` for the schema/backend detail. Every interface
+(Slack, web dashboard, CLI) acts through `review_service.py` — never duplicate
+approve/edit logic in an adapter.
 
 ## Agent Commands
 

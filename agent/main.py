@@ -26,7 +26,6 @@ import re
 import sys
 import threading
 from collections import OrderedDict
-from datetime import datetime, timezone
 
 # Allow imports from agent/ directory
 sys.path.insert(0, os.path.dirname(__file__))
@@ -372,88 +371,49 @@ def start_slack_bot():
             log.info("approval ignored — thread root is not a ContentOps draft")
             return
 
-        # Only act on clear approval keywords
-        if decision == "approve":
-            if not AUTHZ.can_review(user_id, "approve"):
-                client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=AUTHZ.auth_message(user_id, "approve"),
-                    mrkdwn=True,
-                )
-                return
-            _handle_approval(channel, thread_ts, "Approved", "", client, user_id)
-        elif decision == "revise":
-            if not AUTHZ.can_review(user_id, "revise"):
-                client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=AUTHZ.auth_message(user_id, "revise"),
-                    mrkdwn=True,
-                )
-                return
-            notes = raw[7:].strip()
-            _handle_approval(channel, thread_ts, "Needs Revision", notes, client, user_id)
-        elif decision == "reject":
-            if not AUTHZ.can_review(user_id, "reject"):
-                client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=AUTHZ.auth_message(user_id, "reject"),
-                    mrkdwn=True,
-                )
-                return
-            reason = raw[7:].strip()
-            _handle_approval(channel, thread_ts, "Rejected", reason, client, user_id)
+        # Text path carries no button value — recover the Content ID from the
+        # draft root, then hand off to the platform-neutral ReviewService.
+        notes = raw[7:].strip() if decision in {"revise", "reject"} else ""
+        content_id = _content_id_from_root(root)
+        _commit_decision(channel, thread_ts, decision, notes, client, user_id,
+                         content_id, ephemeral=False)
 
-    def _handle_approval(channel, thread_ts, status, notes, client, reviewer_user_id):
-        """Update the tracker and confirm in thread when a reviewer uses text reply."""
-        try:
-            history = client.conversations_replies(channel=channel, ts=thread_ts)
-            original_text = history["messages"][0].get("text", "")
-        except Exception as e:
-            client.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                text=f"Could not read thread history: {e}",
-                mrkdwn=True,
-            )
-            return
+    def _content_id_from_root(root: dict) -> str:
+        """Get the Content ID a draft message refers to (block value, else text)."""
+        for block in root.get("blocks", []) or []:
+            bid = str(block.get("block_id", ""))
+            if bid.startswith("approval_"):
+                return bid[len("approval_"):]
+        return _extract_content_id(root.get("text", ""))
 
-        idea_id = _extract_content_id(original_text)
-        _commit_approval(channel, thread_ts, status, notes, client, reviewer_user_id, idea_id)
-
-    def _commit_approval(channel, message_ts, status, notes, client, reviewer_user_id, idea_id):
-        """Write approval decision to tracker and post confirmation in thread."""
-        from tools.sheets import write_tracker
+    def _commit_decision(channel, message_ts, decision, notes, client,
+                         reviewer_user_id, content_id, ephemeral=False):
+        """Slack adapter over ReviewService: enforce RBAC, write, confirm in UI."""
+        import identity
+        from review_service import decide
         from tools.slack_client import update_draft_message_status
 
-        status_icon = {"Approved": "✅", "Needs Revision": "✏️", "Rejected": "❌"}.get(status, "")
+        principal = identity.resolve("slack", reviewer_user_id)
+        result = decide(principal, content_id, decision, notes, source="slack")
 
-        if idea_id:
-            fields = {
-                "status": status,
-                "reviewer": reviewer_user_id,
-                "review_action_ts": datetime.now(timezone.utc).isoformat(),
-            }
-            if notes:
-                fields["review_notes"] = notes
-            update = write_tracker(idea_id, fields)
-            if "error" in update:
-                reply = f"Could not update tracker for `{idea_id}`: {update['error']}"
+        if result.unauthorized:
+            msg = AUTHZ.auth_message(reviewer_user_id, decision)
+            if ephemeral:
+                client.chat_postEphemeral(channel=channel, user=reviewer_user_id, text=msg)
             else:
-                reply = f"{status_icon} `{idea_id}` → *{status}*"
-                if notes:
-                    reply += f"\n> {notes}"
-                observability.record_approval(idea_id, status, reviewer_user_id, source="slack")
-                # Replace action buttons with a status badge on the original message
-                update_draft_message_status(channel, message_ts, status, reviewer_user_id)
-        else:
-            reply = f"{status_icon} Status recorded: *{status}*. (Could not extract idea ID — update tracker manually.)"
+                client.chat_postMessage(channel=channel, thread_ts=message_ts, text=msg, mrkdwn=True)
+            return
 
-        client.chat_postMessage(
-            channel=channel, thread_ts=message_ts, text=reply, mrkdwn=True
-        )
+        if not result.ok:
+            text = (f"Could not update tracker for `{content_id}`: {result.error}"
+                    if content_id else
+                    "Could not record the decision — no Content ID found. Update the tracker manually.")
+            client.chat_postMessage(channel=channel, thread_ts=message_ts, text=text, mrkdwn=True)
+            return
+
+        # Replace the action buttons with a status badge, then confirm in thread.
+        update_draft_message_status(channel, message_ts, result.status, reviewer_user_id)
+        client.chat_postMessage(channel=channel, thread_ts=message_ts, text=result.message, mrkdwn=True)
 
     # ── Button action handlers ─────────────────────────────────────────────────
 
@@ -464,14 +424,8 @@ def start_slack_bot():
         user_id = body["user"]["id"]
         channel = body["channel"]["id"]
         message_ts = body["message"]["ts"]
-
-        if not AUTHZ.can_review(user_id, "approve"):
-            client.chat_postEphemeral(
-                channel=channel, user=user_id,
-                text=AUTHZ.auth_message(user_id, "approve"),
-            )
-            return
-        _commit_approval(channel, message_ts, "Approved", "", client, user_id, idea_id)
+        _commit_decision(channel, message_ts, "approve", "", client, user_id,
+                         idea_id, ephemeral=True)
 
     @app.action("revise_draft")
     def handle_revise_button(ack, body, client):
@@ -481,7 +435,9 @@ def start_slack_bot():
         message_ts = body["message"]["ts"]
         user_id = body["user"]["id"]
 
-        if not AUTHZ.can_review(user_id, "revise"):
+        # Gate opening the modal on the same central policy (the write re-checks).
+        import identity
+        if not identity.resolve("slack", user_id).can("revise"):
             client.chat_postEphemeral(
                 channel=channel, user=user_id,
                 text=AUTHZ.auth_message(user_id, "revise"),
@@ -522,7 +478,8 @@ def start_slack_bot():
         message_ts = body["message"]["ts"]
         user_id = body["user"]["id"]
 
-        if not AUTHZ.can_review(user_id, "reject"):
+        import identity
+        if not identity.resolve("slack", user_id).can("reject"):
             client.chat_postEphemeral(
                 channel=channel, user=user_id,
                 text=AUTHZ.auth_message(user_id, "reject"),
@@ -561,9 +518,8 @@ def start_slack_bot():
         meta = json.loads(body["view"]["private_metadata"])
         notes = body["view"]["state"]["values"]["notes_block"]["notes_input"]["value"] or ""
         user_id = body["user"]["id"]
-        _commit_approval(
-            meta["channel"], meta["message_ts"], "Needs Revision", notes, client, user_id, meta["idea_id"]
-        )
+        _commit_decision(meta["channel"], meta["message_ts"], "revise", notes,
+                         client, user_id, meta["idea_id"], ephemeral=False)
 
     @app.view("reject_modal")
     def handle_reject_submit(ack, body, client):
@@ -571,9 +527,8 @@ def start_slack_bot():
         meta = json.loads(body["view"]["private_metadata"])
         reason = body["view"]["state"]["values"]["reason_block"]["reason_input"]["value"] or ""
         user_id = body["user"]["id"]
-        _commit_approval(
-            meta["channel"], meta["message_ts"], "Rejected", reason, client, user_id, meta["idea_id"]
-        )
+        _commit_decision(meta["channel"], meta["message_ts"], "reject", reason,
+                         client, user_id, meta["idea_id"], ephemeral=False)
 
     validate_startup()
     observability.init_db()
