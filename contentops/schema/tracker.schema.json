@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://newtuple.com/contentops/tracker.schema.json",
+  "title": "ContentOps Tracker Contract",
+  "description": "Single source of truth for the ContentOps content tracker. Field canonical names, agent-facing aliases, the status vocabulary, and create-time defaults all live here. Python (agent/schema.py) loads this at runtime; storage backends and the Apps Script bridge mirror it. Change the schema here, not in code.",
+  "version": "1.0.0",
+  "primary_key": "Content ID",
+  "status_field": "Status",
+  "draft_field": "Draft Text",
+  "header_markers": {
+    "primary": ["Content ID"],
+    "fallback_any_of": [["Week", "Working Title / Hook"], ["idea_id"]],
+    "min_combo_match": 3,
+    "combo_markers": ["Content ID", "Status", "Working Title / Hook", "Bucket", "idea_id"]
+  },
+  "fields": [
+    {"name": "Content ID", "key": "content_id", "role": "primary_key", "type": "string", "aliases": ["idea_id"]},
+    {"name": "Week", "key": "week", "type": "string", "aliases": []},
+    {"name": "Publish Date", "key": "publish_date", "type": "date", "aliases": ["created_at", "scheduled_at"], "create_default": {"computed": "today"}},
+    {"name": "Weekday", "key": "weekday", "type": "string", "aliases": []},
+    {"name": "Bucket", "key": "bucket", "type": "string", "aliases": []},
+    {"name": "Series Theme", "key": "series_theme", "type": "string", "aliases": ["source_type"], "create_default": {"value": "manual"}},
+    {"name": "Working Title / Hook", "key": "title", "type": "string", "aliases": ["hook"]},
+    {"name": "Audience Intent", "key": "audience_intent", "type": "string", "aliases": [], "create_default": {"value": "Educate and build trust"}},
+    {"name": "Key Message", "key": "key_message", "type": "text", "aliases": ["raw_input"]},
+    {"name": "Format", "key": "format", "type": "string", "aliases": [], "create_default": {"value": "Text Post"}},
+    {"name": "Channel", "key": "channel", "type": "string", "aliases": ["platform"], "create_default": {"value": "LinkedIn"}},
+    {"name": "Owner", "key": "owner", "type": "string", "aliases": []},
+    {"name": "Status", "key": "status", "type": "enum", "enum_ref": "statuses", "aliases": [], "create_default": {"value": "Idea"}},
+    {"name": "Priority", "key": "priority", "type": "string", "aliases": [], "create_default": {"value": "Medium"}},
+    {"name": "Source / Input Link", "key": "source_link", "type": "string", "aliases": []},
+    {"name": "CTA Type", "key": "cta_type", "type": "string", "aliases": [], "create_default": {"value": "Start a conversation"}},
+    {"name": "Repurpose Notes", "key": "repurpose_notes", "type": "text", "aliases": []},
+    {"name": "Published URL", "key": "published_url", "type": "string", "aliases": []},
+    {"name": "Draft Text", "key": "draft_text", "type": "text", "aliases": []},
+    {"name": "Review Notes", "key": "review_notes", "type": "text", "aliases": []},
+    {"name": "Approved By", "key": "approved_by", "type": "string", "aliases": ["reviewer"]},
+    {"name": "Approval Timestamp", "key": "approval_ts", "type": "datetime", "aliases": ["review_action_ts"], "set_on": "approval"}
+  ],
+  "statuses": {
+    "canonical": ["Idea", "Draft", "Needs Review", "Needs Revision", "Approved", "Rejected", "Scheduled", "Published"],
+    "aliases": {
+      "new": "Idea",
+      "idea": "Idea",
+      "draft": "Draft",
+      "needs_review": "Needs Review",
+      "needs_revision": "Needs Revision",
+      "need_revision": "Needs Revision",
+      "revise": "Needs Revision",
+      "approved": "Approved",
+      "approve": "Approved",
+      "rejected": "Rejected",
+      "reject": "Rejected",
+      "scheduled": "Scheduled",
+      "published": "Published"
+    }
+  },
+  "create_template": {
+    "key_message_falls_back_to": "raw_input",
+    "draft_text_falls_back_to": "key_message"
+  }
+}

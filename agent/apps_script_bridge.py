@@ -10,9 +10,21 @@ ContentOps token.
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Dict, Optional
 
 import requests
+
+log = logging.getLogger(__name__)
+
+# Apps Script web apps occasionally return transient 5xx / time out under load.
+# Retry those a few times with exponential backoff; do NOT retry 4xx (a 401/400
+# won't fix itself) or application-level ok=false errors.
+_MAX_ATTEMPTS = 4
+_BACKOFF_BASE = 0.5  # seconds: 0.5, 1.0, 2.0 between attempts
+_RETRY_STATUS = {429, 500, 502, 503, 504}
+_TIMEOUT = 30
 
 
 class AppsScriptBridge:
@@ -32,12 +44,35 @@ class AppsScriptBridge:
         if payload:
             body.update(payload)
 
-        response = requests.post(self.url, json=body, timeout=30)
-        response.raise_for_status()
+        response = self._post_with_retry(body)
         data = response.json()
         if data.get("ok") is False:
             return {"error": data.get("error", "Apps Script returned ok=false")}
         return data.get("data", data)
+
+    def _post_with_retry(self, body: Dict[str, Any]) -> requests.Response:
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                response = requests.post(self.url, json=body, timeout=_TIMEOUT)
+                if response.status_code in _RETRY_STATUS and attempt < _MAX_ATTEMPTS:
+                    raise requests.HTTPError(f"transient {response.status_code}")
+                response.raise_for_status()
+                return response
+            except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as e:
+                last_exc = e
+                # Don't retry deterministic client errors (4xx other than 429).
+                resp = getattr(e, "response", None)
+                status = getattr(resp, "status_code", None)
+                if status is not None and status not in _RETRY_STATUS:
+                    raise
+                if attempt >= _MAX_ATTEMPTS:
+                    break
+                sleep_s = _BACKOFF_BASE * (2 ** (attempt - 1))
+                log.warning("apps_script %s failed (attempt %d/%d): %s — retrying in %.1fs",
+                            body.get("action"), attempt, _MAX_ATTEMPTS, e, sleep_s)
+                time.sleep(sleep_s)
+        raise last_exc  # type: ignore[misc]
 
     def health(self) -> Dict[str, Any]:
         return self.call("health")

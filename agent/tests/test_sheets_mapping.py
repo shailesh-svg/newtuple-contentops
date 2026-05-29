@@ -1,8 +1,12 @@
-from tools.sheets import _normalize_fields, _normalize_status
+"""Field + status normalisation now lives in the canonical schema (agent/schema.py).
+These tests pin the legacy-alias → live-tracker mapping at its source of truth.
+"""
+
+from schema import normalize_fields, normalize_status
 
 
 def test_normalize_fields_maps_legacy_schema_to_live_tracker_schema():
-    fields = _normalize_fields(
+    fields = normalize_fields(
         {
             "idea_id": "CNT-1",
             "title": "Hook",
@@ -24,7 +28,7 @@ def test_normalize_fields_maps_legacy_schema_to_live_tracker_schema():
 
 
 def test_normalize_status_maps_to_live_tracker_values():
-    assert _normalize_status("new") == "Idea"
-    assert _normalize_status("needs_review") == "Needs Review"
-    assert _normalize_status("approved") == "Approved"
-    assert _normalize_status("published") == "Published"
+    assert normalize_status("new") == "Idea"
+    assert normalize_status("needs_review") == "Needs Review"
+    assert normalize_status("approved") == "Approved"
+    assert normalize_status("published") == "Published"

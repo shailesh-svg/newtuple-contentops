@@ -1,32 +1,119 @@
 // ContentOps Agent — Google Apps Script bridge
-// Deploy as Web App: Execute as Me, Access: Anyone with Google account (or Anyone)
-// Set CONTENTOPS_TOKEN to a long random string and put the same value in agent/.env
+// Deploy as Web App: Execute as Me, Access: Anyone (gated by the token below).
+//
+// CONFIGURATION lives in Script Properties (Project Settings → Script Properties),
+// NOT in this source file. This keeps secrets out of code and lets one deployed
+// script serve dev/staging/prod by changing properties only. Required keys:
+//
+//   CONTENTOPS_TOKEN     a long random string; must match agent/.env
+//   ALLOWED_SHEET_IDS    comma-separated allowlist of spreadsheet IDs
+//   ALLOWED_FOLDER_IDS   comma-separated allowlist of Drive folder IDs
+//   DEFAULT_SHEET_ID     (optional) used when a request omits sheetId
+//   DEFAULT_FOLDER_ID    (optional) used when a request omits folderId
+//
+// Run setup() once from the editor to seed these, then delete your values from it.
 
-const CONTENTOPS_TOKEN = 'CHANGE_ME_TO_A_LONG_RANDOM_TOKEN';
+const SCHEMA_VERSION = '1.0.0';
+
+// One-time helper: fill in your values, run setup() from the Apps Script editor,
+// then clear the values again. (Do not commit real values here.)
+function setup() {
+  PropertiesService.getScriptProperties().setProperties({
+    CONTENTOPS_TOKEN:   '',   // long random string
+    ALLOWED_SHEET_IDS:  '',   // e.g. "1AbC...,1XyZ..."
+    ALLOWED_FOLDER_IDS: '',   // e.g. "0B1...,0B2..."
+    DEFAULT_SHEET_ID:   '',
+    DEFAULT_FOLDER_ID:  '',
+  });
+}
+
+function getConfig_() {
+  const p = PropertiesService.getScriptProperties();
+  const list = (key) => String(p.getProperty(key) || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  return {
+    token:          p.getProperty('CONTENTOPS_TOKEN') || '',
+    allowedSheets:  list('ALLOWED_SHEET_IDS'),
+    allowedFolders: list('ALLOWED_FOLDER_IDS'),
+    defaultSheet:   p.getProperty('DEFAULT_SHEET_ID') || '',
+    defaultFolder:  p.getProperty('DEFAULT_FOLDER_ID') || '',
+  };
+}
+
+// Constant-time-ish comparison to avoid leaking token length/prefix via timing.
+function safeEquals_(a, b) {
+  a = String(a || ''); b = String(b || '');
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// Resolve + AUTHORISE the target sheet. A request may only touch an allowlisted
+// spreadsheet; omitting sheetId falls back to the configured default.
+function resolveSheetId_(body, cfg) {
+  const requested = String(body.sheetId || '').trim();
+  if (!requested) {
+    if (!cfg.defaultSheet) throw new Error('No sheetId provided and no DEFAULT_SHEET_ID configured');
+    return cfg.defaultSheet;
+  }
+  if (cfg.allowedSheets.length && cfg.allowedSheets.indexOf(requested) < 0) {
+    throw new Error('sheetId is not in the allowlist');
+  }
+  return requested;
+}
+
+function resolveFolderId_(body, cfg) {
+  const requested = String(body.folderId || body.folder_id || '').trim();
+  if (!requested) {
+    if (!cfg.defaultFolder) throw new Error('No folderId provided and no DEFAULT_FOLDER_ID configured');
+    return cfg.defaultFolder;
+  }
+  if (cfg.allowedFolders.length && cfg.allowedFolders.indexOf(requested) < 0) {
+    throw new Error('folderId is not in the allowlist');
+  }
+  return requested;
+}
 
 // ─── Router ──────────────────────────────────────────────────────────────────
 
+function doGet() {
+  // Lightweight health probe (no token / no data access).
+  return jsonResponse({ ok: true, data: { status: 'ok', schema_version: SCHEMA_VERSION } });
+}
+
 function doPost(e) {
   try {
-    const body = JSON.parse(e.postData.contents || '{}');
-    if (body.token !== CONTENTOPS_TOKEN) {
+    const cfg = getConfig_();
+    if (!cfg.token) {
+      return jsonResponse({ ok: false, error: 'Server not configured (set Script Properties)' });
+    }
+    const body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    if (!safeEquals_(body.token, cfg.token)) {
       return jsonResponse({ ok: false, error: 'Unauthorized' });
     }
 
+    // Resolve + authorise the sheet once for all tracker actions.
+    const sheetId = resolveSheetId_(body, cfg);
+    body.sheetId = sheetId;
+
     const action = body.action;
-    if (action === 'health')           return jsonResponse({ ok: true,  data: { status: 'ok' } });
+    if (action === 'health')           return jsonResponse({ ok: true,  data: { status: 'ok', schema_version: SCHEMA_VERSION } });
     if (action === 'get_schema')       return jsonResponse({ ok: true,  data: getSchema(body) });
     if (action === 'read_tracker')     return jsonResponse({ ok: true,  data: readTracker(body) });
     if (action === 'write_tracker')    return jsonResponse({ ok: true,  data: writeTracker(body) });
     if (action === 'append_idea')      return jsonResponse({ ok: true,  data: appendIdea(body) });
     if (action === 'upsert_tracker_row') return jsonResponse({ ok: true, data: upsertTrackerRow(body) });
     if (action === 'update_approval')  return jsonResponse({ ok: true,  data: updateApproval(body) });
-    if (action === 'list_drive_files') return jsonResponse({ ok: true,  data: listDriveFiles(body) });
-    if (action === 'read_drive_doc')   return jsonResponse({ ok: true,  data: readDriveDoc(body) });
+    if (action === 'list_drive_files') return jsonResponse({ ok: true,  data: listDriveFiles(body, cfg) });
+    if (action === 'read_drive_doc')   return jsonResponse({ ok: true,  data: readDriveDoc(body, cfg) });
 
     return jsonResponse({ ok: false, error: `Unknown action: ${action}` });
   } catch (err) {
-    return jsonResponse({ ok: false, error: String(err && err.stack ? err.stack : err) });
+    // Log full detail server-side; return a generic message to the caller so we
+    // never leak stack traces / internal IDs over the wire.
+    console.error('ContentOps doPost error: ' + (err && err.stack ? err.stack : err));
+    return jsonResponse({ ok: false, error: 'Request failed: ' + String(err && err.message ? err.message : err) });
   }
 }
 
@@ -158,7 +245,7 @@ function getSchema(body) {
   const { headerRow, headers } = getHeaders_(sheet);
   const columns = {};
   headers.forEach((h, i) => { if (h) columns[h] = i + 1; });
-  return { header_row: headerRow, columns };
+  return { header_row: headerRow, columns, schema_version: SCHEMA_VERSION };
 }
 
 function readTracker(body) {
@@ -276,10 +363,8 @@ function updateApproval(body) {
 
 // ─── Drive ───────────────────────────────────────────────────────────────────
 
-function listDriveFiles(body) {
-  const folderId = body.folderId || body.folder_id;
-  if (!folderId) return { files: [], error: 'folderId not provided' };
-
+function listDriveFiles(body, cfg) {
+  const folderId = resolveFolderId_(body, cfg);
   const folder = DriveApp.getFolderById(folderId);
   const query  = String(body.query || '').toLowerCase();
   const files  = [];
@@ -299,12 +384,19 @@ function listDriveFiles(body) {
   return { files };
 }
 
-function readDriveDoc(body) {
+function readDriveDoc(body, cfg) {
   const fileId = extractId_(body.doc_id);
   const file   = DriveApp.getFileById(fileId);
+
+  // Authorisation: when a folder allowlist is configured, the file must live in
+  // (or under) an allowed folder. This prevents reading arbitrary files the
+  // deploying account can otherwise access.
+  if (cfg.allowedFolders.length && !fileInAllowedFolder_(file, cfg.allowedFolders)) {
+    throw new Error('file is not within an allowed folder');
+  }
+
   const mime   = file.getMimeType();
   let content  = '';
-
   if (mime === MimeType.GOOGLE_DOCS) {
     content = DocumentApp.openById(fileId).getBody().getText();
   } else {
@@ -312,6 +404,17 @@ function readDriveDoc(body) {
   }
 
   return { file_id: fileId, name: file.getName(), content };
+}
+
+// True if the file sits directly inside any allowlisted folder.
+function fileInAllowedFolder_(file, allowedFolders) {
+  const allow = {};
+  allowedFolders.forEach(id => { allow[id] = true; });
+  const parents = file.getParents();
+  while (parents.hasNext()) {
+    if (allow[parents.next().getId()]) return true;
+  }
+  return false;
 }
 
 function extractId_(input) {
